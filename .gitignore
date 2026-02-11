@@ -1,2 +1,12 @@
 SimVirtualLocation.xcodeproj/xcuserdata
+SimVirtualLocation.xcodeproj/project.pbxproj
 DerivedData
+
+# Swift Package Manager
+.build/
+.swiftpm/
+*.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/
+*.xcworkspace/xcshareddata/swiftpm/
+
+# Xcode workspace
+*.xcworkspace/xcuserdata/
