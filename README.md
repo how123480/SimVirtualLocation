@@ -12,6 +12,26 @@ You can dowload compiled and signed app [here](https://github.com/nexron171/SimV
 
 ![App Screen Shot](https://raw.githubusercontent.com/nexron171/SimVirtualLocation/master/assets/screenshot.png)
 
+## Development
+This project supports both **Xcode** and **Swift Package Manager**:
+
+### Using Xcode (Recommended for App Development)
+```bash
+open SimVirtualLocation.xcodeproj
+```
+
+### Using Swift Package Manager
+```bash
+# Open with any IDE that supports Swift Package
+open Package.swift
+
+# Or build from command line
+swift build
+swift test
+```
+
+For detailed Swift Package configuration, see [SWIFT_PACKAGE_SETUP.md](./SWIFT_PACKAGE_SETUP.md)
+
 ## FAQ
 ---
 ### How to run
