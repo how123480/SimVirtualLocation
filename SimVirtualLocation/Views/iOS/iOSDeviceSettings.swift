@@ -38,8 +38,31 @@ struct iOSDeviceSettings: View {
                     Text("iOS 17+")
                 }
                 if locationController.useRSD {
+                    Button(action: {
+                        if locationController.isTunnelRunning {
+                            locationController.stopRSDTunnel()
+                        } else {
+                            locationController.startRSDTunnel()
+                        }
+                    }) {
+                        HStack {
+                            Image(systemName: locationController.isTunnelRunning ? "stop.circle.fill" : "play.circle.fill")
+                            Text(locationController.isTunnelRunning ? "Stop Tunnel" : "Start Tunnel")
+                            if !locationController.tunnelStatus.isEmpty {
+                                Text("(\(locationController.tunnelStatus))")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                        .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(locationController.isTunnelRunning ? .red : .blue)
+                    
                     TextField("RSD Address", text: $locationController.RSDAddress)
+                        .disabled(locationController.isTunnelRunning)
                     TextField("RSD Port", text: $locationController.RSDPort)
+                        .disabled(locationController.isTunnelRunning)
                 } else {
                     TextField("Xcode path", text: $locationController.xcodePath)
                     Picker("Device:", selection: $locationController.selectedDevice) {

@@ -5,6 +5,7 @@
 //  Created by Sergey Shirnin on 21.02.2022.
 //
 
+import AppKit
 import Combine
 import CoreLocation
 import MapKit
@@ -62,6 +63,9 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
     @Published var RSDAddress: String = ""
     @Published var RSDPort: String = ""
 
+    @Published var isTunnelRunning: Bool = false
+    @Published var tunnelStatus: String = ""
+
     @Published var timeScale: Double = 1.5 {
         didSet { runner.timeDelay = timeScale }
     }
@@ -99,6 +103,7 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
     private var tracksTimes: [Track: Double] = [:]
     
     private var timer: Timer?
+    private var tunnelProcess: Process?
 
     @Published var savedLocations: [Location] = []
 
@@ -132,6 +137,10 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
 
             loadLocations()
         }
+    }
+
+    deinit {
+        stopRSDTunnel()
     }
 
     // MARK: - Public
@@ -481,6 +490,143 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
         }
     }
 
+    func startRSDTunnel() {
+        guard !isTunnelRunning else {
+            showAlert("Tunnel is already running")
+            return
+        }
+
+        guard let password = promptForPassword() else {
+            log("RSD tunnel start cancelled by user")
+            return
+        }
+
+        // Run tunnel start on background queue to avoid blocking UI
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self = self else { return }
+            
+            // Setup pipes
+            let inputPipe = Pipe()
+            let outputPipe = Pipe()
+            let errorPipe = Pipe()
+
+            // Create sudo task with pymobiledevice3 command
+            let sudoTask = Process()
+            sudoTask.executableURL = URL(fileURLWithPath: "/usr/bin/sudo")
+            sudoTask.arguments = ["-S", "pymobiledevice3", "remote", "start-tunnel", "--protocol", "tcp"]
+            sudoTask.standardInput = inputPipe
+            sudoTask.standardOutput = outputPipe
+            sudoTask.standardError = errorPipe
+
+            DispatchQueue.main.async {
+                self.tunnelStatus = "Starting tunnel..."
+            }
+
+            // Setup output handler BEFORE starting process
+            outputPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
+                let data = handle.availableData
+                if data.count > 0, let output = String(data: data, encoding: .utf8) {
+                    DispatchQueue.main.async {
+                        self?.parseRSDOutput(output)
+                    }
+                }
+            }
+
+            // Setup error handler BEFORE starting process
+            errorPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
+                let data = handle.availableData
+                if data.count > 0, let errorText = String(data: data, encoding: .utf8) {
+                    let trimmed = errorText.trimmingCharacters(in: .whitespacesAndNewlines)
+                    
+                    DispatchQueue.main.async {
+                        // Only show alerts for actual errors, not password prompts
+                        if !trimmed.isEmpty {
+                            if trimmed.contains("incorrect password") || 
+                               (trimmed.contains("Sorry, try again") && !trimmed.contains("Password:")) {
+                                self?.showAlert("Incorrect sudo password")
+                                self?.isTunnelRunning = false
+                                self?.tunnelStatus = ""
+                            } else if trimmed.contains("command not found") || 
+                                      trimmed.contains("pymobiledevice3: not found") {
+                                self?.showAlert("pymobiledevice3 not found in PATH. Please ensure it's installed.")
+                                self?.isTunnelRunning = false
+                                self?.tunnelStatus = ""
+                            }
+                        }
+                    }
+                }
+            }
+
+            do {
+                // Start the process
+                try sudoTask.run()
+
+                // Write password to stdin immediately with proper flushing
+                if let passwordData = "\(password)\n".data(using: .utf8) {
+                    try inputPipe.fileHandleForWriting.write(contentsOf: passwordData)
+                    // Force synchronize to ensure data is written
+                    if #available(macOS 10.15.4, *) {
+                        try? inputPipe.fileHandleForWriting.synchronize()
+                    }
+                    
+                    // Close the input pipe after writing password
+                    try? inputPipe.fileHandleForWriting.close()
+                }
+
+                DispatchQueue.main.async {
+                    self.tunnelProcess = sudoTask
+                    self.isTunnelRunning = true
+                    self.tunnelStatus = "Authenticating..."
+                }
+
+                // Monitor process termination
+                sudoTask.terminationHandler = { [weak self] process in
+                    DispatchQueue.main.async {
+                        self?.isTunnelRunning = false
+                        self?.tunnelStatus = ""
+                        self?.tunnelProcess = nil
+                        
+                        if process.terminationStatus != 0 {
+                            self?.showAlert("Tunnel exited with error code: \(process.terminationStatus)")
+                        }
+                    }
+                }
+
+            } catch {
+                DispatchQueue.main.async {
+                    self.showAlert("Failed to start tunnel: \(error.localizedDescription)")
+                    self.isTunnelRunning = false
+                    self.tunnelStatus = ""
+                }
+            }
+        }
+    }
+
+    func stopRSDTunnel() {
+        guard let process = tunnelProcess, process.isRunning else {
+            isTunnelRunning = false
+            tunnelStatus = ""
+            tunnelProcess = nil
+            return
+        }
+
+        log("Stopping RSD tunnel...")
+        
+        // Clean up file handle handlers
+        if let stdout = process.standardOutput as? Pipe {
+            stdout.fileHandleForReading.readabilityHandler = nil
+        }
+        if let stderr = process.standardError as? Pipe {
+            stderr.fileHandleForReading.readabilityHandler = nil
+        }
+        
+        process.terminate()
+        tunnelProcess = nil
+        isTunnelRunning = false
+        tunnelStatus = ""
+        showAlert("RSD tunnel stopped")
+    }
+
     func savePointA() {
         guard let point = annotations.first?.coordinate else {
             showAlert("Point A is not selected")
@@ -590,6 +736,58 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
     }
 
     // MARK: - Private
+
+    private func promptForPassword() -> String? {
+        let alert = NSAlert()
+        alert.messageText = "Enter Password"
+        alert.informativeText = "Sudo password is required to start the RSD tunnel."
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "OK")
+        alert.addButton(withTitle: "Cancel")
+
+        let passwordField = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 200, height: 24))
+        alert.accessoryView = passwordField
+
+        alert.window.initialFirstResponder = passwordField
+
+        let response = alert.runModal()
+        if response == .alertFirstButtonReturn {
+            return passwordField.stringValue
+        }
+        return nil
+    }
+
+    private func parseRSDOutput(_ output: String) {        
+        // Parse RSD Address (IPv6 address after "RSD Address:")
+        if let addressRange = output.range(of: "RSD Address:\\s*([a-fA-F0-9:]+)", options: .regularExpression) {
+            let match = output[addressRange]
+            let components = match.components(separatedBy: CharacterSet.whitespaces)
+            if components.count >= 2 {
+                let address = components.last ?? ""
+                if !address.isEmpty && address != RSDAddress {
+                    DispatchQueue.main.async { [weak self] in
+                        self?.RSDAddress = address
+                    }
+                }
+            }
+        }
+
+        // Parse RSD Port (number after "RSD Port:")
+        if let portRange = output.range(of: "RSD Port:\\s*(\\d+)", options: .regularExpression) {
+            let match = output[portRange]
+            let components = match.components(separatedBy: CharacterSet.whitespaces)
+            if components.count >= 2 {
+                let port = components.last ?? ""
+                if !port.isEmpty && port != RSDPort {
+                    DispatchQueue.main.async { [weak self] in
+                        self?.RSDPort = port
+                        self?.tunnelStatus = "Connected"
+                        self?.showAlert("RSD tunnel connected!\nAddress: \(self?.RSDAddress ?? "")\nPort: \(port)")
+                    }
+                }
+            }
+        }
+    }
 
     private func loadLocations() {
         guard let data = defaults.data(forKey: Constants.defaultsSavedLocationsPathKey) else {
