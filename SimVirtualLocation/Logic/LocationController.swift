@@ -604,9 +604,11 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
 
     func stopRSDTunnel() {
         guard let process = tunnelProcess, process.isRunning else {
-            isTunnelRunning = false
-            tunnelStatus = ""
-            tunnelProcess = nil
+            DispatchQueue.main.async {
+                self.isTunnelRunning = false
+                self.tunnelStatus = ""
+                self.tunnelProcess = nil
+            }
             return
         }
 
@@ -621,10 +623,13 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
         }
         
         process.terminate()
-        tunnelProcess = nil
-        isTunnelRunning = false
-        tunnelStatus = ""
-        showAlert("RSD tunnel stopped")
+        
+        DispatchQueue.main.async {
+            self.tunnelProcess = nil
+            self.isTunnelRunning = false
+            self.tunnelStatus = ""
+            self.showAlert("RSD tunnel stopped")
+        }
     }
 
     func savePointA() {
