@@ -14,7 +14,6 @@ class Runner {
 
     var timeDelay: TimeInterval = 0.5
     var log: ((String) -> Void)?
-    var pymobiledevicePath: String?
 
     // MARK: - Private Properties
 
@@ -340,58 +339,32 @@ class Runner {
         task.waitUntilExit()
     }
 
+    func getFullPathOf(_ command: String) -> String? {
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/which")
+        task.arguments = [command]
+        
+        let pipe = Pipe()
+        task.standardOutput = pipe
+        
+        do {
+            try task.run()
+            task.waitUntilExit()
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            let path = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            return (path?.isEmpty ?? true) ? nil : path
+        } catch {
+            return nil
+        }
+    }
+
     func taskForIOS(args: [String], showAlert: (String) -> Void) async throws -> Process {
-        // let whichTask = Process()
-        // let whichURL = URL(fileURLWithPath: "/usr/bin/find")
-        // let userPath = "/Users/\(NSUserName())/Library"
-        // whichTask.executableURL = whichURL
-        // whichTask.currentDirectoryURL = URL(fileURLWithPath: userPath)
-        // whichTask.arguments = ["Python", "-name", "pymobiledevice3"]
-
-        // let outputPipe = Pipe()
-        // let errorPipe = Pipe()
-
-        // whichTask.standardOutput = outputPipe
-        // whichTask.standardError = errorPipe
-
-        // try whichTask.run()
-        // whichTask.waitUntilExit()
-
-        // if pymobiledevicePath == nil || pymobiledevicePath == "" {
-        //     let data = outputPipe.fileHandleForReading.readDataToEndOfFile()
-        //     try outputPipe.fileHandleForReading.close()
-        //     let rawValue = String(decoding: data, as: UTF8.self)
-        //     let sortedPaths = rawValue.split(separator: "\n").sorted{ a, b in
-        //         b.localizedCaseInsensitiveCompare(a) == .orderedDescending
-        //     }
-
-        //     if let path = sortedPaths.first {
-        //         pymobiledevicePath = "\(userPath)/\(String(path))"
-        //     } else {
-        //         showAlert("""
-        //         pymobiledevice3 not found, it should be installed with python
-        //         to install pymobiledevice3 properly try install it with following command:
-        //         `brew install python3 && python3 -m pip install -U pymobiledevice3 --break-system-packages --user`
-        //         """)
-        //         pymobiledevicePath = ""
-        //     }
-
-        //     let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
-        //     let error = String(decoding: errorData, as: UTF8.self)
-        //     if !error.isEmpty {
-        //         showAlert(error)
-        //     }
-        //     try? errorPipe.fileHandleForReading.close()
-        // }
-
-//        #if arch(arm64)
-//        let path: URL = URL(string: "file:///opt/homebrew/bin/pymobiledevice3")!
-//        #else
-//        let path: URL = URL(string: "file:///usr/local/bin/pymobiledevice3")!
-//        #endif
-        // pymobiledevicePath = "pymobiledevice3"
-        let path: URL = URL(fileURLWithPath: "/Users/how123480/.local/bin/pymobiledevice3")
-
+        let pymobiledeivcePath = getFullPathOf("pymobiledevice3")
+        if pymobiledeivcePath == nil {
+            showAlert("pymobiledevice3 not found. Please install it using 'pip install pymobiledevice3' and ensure it's in your PATH.")
+            throw NSError(domain: "Runner", code: 1, userInfo: [NSLocalizedDescriptionKey: "pymobiledevice3 not found"])
+        }
+        let path: URL = URL(fileURLWithPath: pymobiledeivcePath!)
         let task = Process()
         task.executableURL = path
         task.arguments = args
