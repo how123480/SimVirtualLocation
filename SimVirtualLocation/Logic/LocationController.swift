@@ -948,16 +948,24 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
         defaults.set(isEmulator, forKey: "is_emulator")
         
         if deviceType != 0 {
-            do {
-                try runOnAndroid(location: location)
-            } catch {
-                showAlert("\(error)")
+            // Stop previous task asynchronously for Android
+            Task {
+                await runner.stopCurrentTask()
+                do {
+                    try runOnAndroid(location: location)
+                } catch {
+                    showAlert("\(error)")
+                }
             }
             return
         }
+        
         if deviceMode == .device {
             if useRSD {
                 Task {
+                    // Stop previous task before starting new one
+                    await runner.stopCurrentTask()
+                    
                     try await runner.runOnNewIos(
                         location: location,
                         RSDAddress: RSDAddress,
@@ -968,6 +976,9 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
 
             } else {
                 Task {
+                    // Stop previous task before starting new one
+                    await runner.stopCurrentTask()
+                    
                     try await runner.runOnIos(
                         location: location,
                         showAlert: showAlert
@@ -979,12 +990,16 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
                 isSimulating = false
                 showAlert(SimulatorFetchError.noBootedSimulators.description)
             }
-            runner.runOnSimulator(
-                location: location,
-                selectedSimulator: selectedSimulator,
-                bootedSimulators: bootedSimulators,
-                showAlert: showAlert
-            )
+            // For simulator, stop task in background
+            Task {
+                await runner.stopCurrentTask()
+                runner.runOnSimulator(
+                    location: location,
+                    selectedSimulator: selectedSimulator,
+                    bootedSimulators: bootedSimulators,
+                    showAlert: showAlert
+                )
+            }
         }
     }
     

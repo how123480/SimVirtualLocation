@@ -29,12 +29,54 @@ class Runner {
     private var isStopped: Bool = false
 
     // MARK: - Internal Methods
+    
+    /// Filters out known benign warnings from error messages
+    private func shouldSuppressError(_ error: String) -> Bool {
+        // Suppress urllib3 OpenSSL/LibreSSL warnings (common on macOS)
+        if error.contains("NotOpenSSLWarning") || 
+           error.contains("urllib3 v2 only supports OpenSSL") ||
+           error.contains("LibreSSL") {
+            return true
+        }
+        
+        // Suppress empty or whitespace-only errors
+        if error.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return true
+        }
+        
+        return false
+    }
 
     func stop() {
         tasks.forEach { $0.terminate() }
         tasks = []
 
         isStopped = true
+    }
+    
+    func stopCurrentTask() async {
+        guard let task = currentTask, task.isRunning else {
+            return
+        }
+        
+        log?("Stopping current location task to start new one")
+        task.terminate()
+        
+        // Wait asynchronously for the task to exit (up to 2 seconds)
+        let startTime = Date()
+        let timeout: TimeInterval = 2.0
+        
+        while task.isRunning && Date().timeIntervalSince(startTime) < timeout {
+            try? await Task.sleep(nanoseconds: 50_000_000) // Sleep 50ms
+        }
+        
+        if task.isRunning {
+            log?("Warning: Task did not exit within timeout, forcing cleanup")
+        } else {
+            log?("Previous task stopped successfully")
+        }
+        
+        currentTask = nil
     }
     
     func runOnSimulator(
@@ -97,15 +139,28 @@ class Runner {
             }
 
             task.waitUntilExit()
+            
+            // Clear currentTask reference after task exits
+            self.currentTask = nil
 
-            if let errorData = try errorPipe.fileHandleForReading.readToEnd() {
-                let error = String(decoding: errorData, as: UTF8.self)
+            // Only show errors if task wasn't terminated (exit code 15 = SIGTERM)
+            // When terminated by stopCurrentTask(), SSL errors are expected and should be ignored
+            if task.terminationStatus != 15 {
+                if let errorData = try errorPipe.fileHandleForReading.readToEnd() {
+                    let error = String(decoding: errorData, as: UTF8.self)
 
-                if !error.isEmpty {
-                    showAlert(error)
+                    // Filter out known benign warnings (urllib3, LibreSSL, etc.)
+                    if !error.isEmpty && !self.shouldSuppressError(error) {
+                        showAlert(error)
+                    } else if !error.isEmpty {
+                        self.log?("Suppressed benign warning: \(error.prefix(100))...")
+                    }
                 }
+            } else {
+                self.log?("Task terminated (exit code 15), errors suppressed")
             }
         } catch {
+            self.currentTask = nil
             showAlert(error.localizedDescription)
             return
         }
@@ -167,15 +222,28 @@ class Runner {
             }
 
             task.waitUntilExit()
+            
+            // Clear currentTask reference after task exits
+            self.currentTask = nil
 
-            if let errorData = try errorPipe.fileHandleForReading.readToEnd() {
-                let error = String(decoding: errorData, as: UTF8.self)
+            // Only show errors if task wasn't terminated (exit code 15 = SIGTERM)
+            // When terminated by stopCurrentTask(), SSL errors are expected and should be ignored
+            if task.terminationStatus != 15 {
+                if let errorData = try errorPipe.fileHandleForReading.readToEnd() {
+                    let error = String(decoding: errorData, as: UTF8.self)
 
-                if !error.isEmpty {
-                    showAlert(error)
+                    // Filter out known benign warnings (urllib3, LibreSSL, etc.)
+                    if !error.isEmpty && !self.shouldSuppressError(error) {
+                        showAlert(error)
+                    } else if !error.isEmpty {
+                        self.log?("Suppressed benign warning: \(error.prefix(100))...")
+                    }
                 }
+            } else {
+                self.log?("Task terminated (exit code 15), errors suppressed")
             }
         } catch {
+            self.currentTask = nil
             showAlert(error.localizedDescription)
             return
         }
@@ -273,56 +341,56 @@ class Runner {
     }
 
     func taskForIOS(args: [String], showAlert: (String) -> Void) async throws -> Process {
-        let whichTask = Process()
-        let whichURL = URL(fileURLWithPath: "/usr/bin/find")
-        let userPath = "/Users/\(NSUserName())/Library"
-        whichTask.executableURL = whichURL
-        whichTask.currentDirectoryURL = URL(fileURLWithPath: userPath)
-        whichTask.arguments = ["Python", "-name", "pymobiledevice3"]
+        // let whichTask = Process()
+        // let whichURL = URL(fileURLWithPath: "/usr/bin/find")
+        // let userPath = "/Users/\(NSUserName())/Library"
+        // whichTask.executableURL = whichURL
+        // whichTask.currentDirectoryURL = URL(fileURLWithPath: userPath)
+        // whichTask.arguments = ["Python", "-name", "pymobiledevice3"]
 
-        let outputPipe = Pipe()
-        let errorPipe = Pipe()
+        // let outputPipe = Pipe()
+        // let errorPipe = Pipe()
 
-        whichTask.standardOutput = outputPipe
-        whichTask.standardError = errorPipe
+        // whichTask.standardOutput = outputPipe
+        // whichTask.standardError = errorPipe
 
-        try whichTask.run()
-        whichTask.waitUntilExit()
+        // try whichTask.run()
+        // whichTask.waitUntilExit()
 
-        if pymobiledevicePath == nil || pymobiledevicePath == "" {
-            let data = outputPipe.fileHandleForReading.readDataToEndOfFile()
-            try outputPipe.fileHandleForReading.close()
-            let rawValue = String(decoding: data, as: UTF8.self)
-            let sortedPaths = rawValue.split(separator: "\n").sorted{ a, b in
-                b.localizedCaseInsensitiveCompare(a) == .orderedDescending
-            }
+        // if pymobiledevicePath == nil || pymobiledevicePath == "" {
+        //     let data = outputPipe.fileHandleForReading.readDataToEndOfFile()
+        //     try outputPipe.fileHandleForReading.close()
+        //     let rawValue = String(decoding: data, as: UTF8.self)
+        //     let sortedPaths = rawValue.split(separator: "\n").sorted{ a, b in
+        //         b.localizedCaseInsensitiveCompare(a) == .orderedDescending
+        //     }
 
-            if let path = sortedPaths.first {
-                pymobiledevicePath = "\(userPath)/\(String(path))"
-            } else {
-                showAlert("""
-                pymobiledevice3 not found, it should be installed with python
-                to install pymobiledevice3 properly try install it with following command:
-                `brew install python3 && python3 -m pip install -U pymobiledevice3 --break-system-packages --user`
-                """)
-                pymobiledevicePath = ""
-            }
+        //     if let path = sortedPaths.first {
+        //         pymobiledevicePath = "\(userPath)/\(String(path))"
+        //     } else {
+        //         showAlert("""
+        //         pymobiledevice3 not found, it should be installed with python
+        //         to install pymobiledevice3 properly try install it with following command:
+        //         `brew install python3 && python3 -m pip install -U pymobiledevice3 --break-system-packages --user`
+        //         """)
+        //         pymobiledevicePath = ""
+        //     }
 
-            let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
-            let error = String(decoding: errorData, as: UTF8.self)
-            if !error.isEmpty {
-                showAlert(error)
-            }
-            try? errorPipe.fileHandleForReading.close()
-        }
+        //     let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
+        //     let error = String(decoding: errorData, as: UTF8.self)
+        //     if !error.isEmpty {
+        //         showAlert(error)
+        //     }
+        //     try? errorPipe.fileHandleForReading.close()
+        // }
 
 //        #if arch(arm64)
 //        let path: URL = URL(string: "file:///opt/homebrew/bin/pymobiledevice3")!
 //        #else
 //        let path: URL = URL(string: "file:///usr/local/bin/pymobiledevice3")!
 //        #endif
-
-        let path: URL = URL(fileURLWithPath: pymobiledevicePath!)
+        // pymobiledevicePath = "pymobiledevice3"
+        let path: URL = URL(fileURLWithPath: "/Users/how123480/.local/bin/pymobiledevice3")
 
         let task = Process()
         task.executableURL = path
