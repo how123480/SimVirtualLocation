@@ -340,9 +340,40 @@ class Runner {
     }
 
     func getFullPathOf(_ command: String) -> String? {
+        // Common installation paths for command-line tools
+        let commonPaths = [
+            "/Users/\(NSUserName())/.local/bin/\(command)",
+            "/opt/homebrew/bin/\(command)",
+            "/usr/local/bin/\(command)",
+            "/usr/bin/\(command)",
+        ]
+        
+        // Check common paths first
+        for path in commonPaths {
+            if FileManager.default.fileExists(atPath: path) && FileManager.default.isExecutableFile(atPath: path) {
+                return path
+            }
+        }
+        
+        // Fallback: try using 'which' command with expanded PATH
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/usr/bin/which")
         task.arguments = [command]
+        
+        // Set a comprehensive PATH that includes common locations
+        var environment = ProcessInfo.processInfo.environment
+        let expandedPath = [
+            "/Users/\(NSUserName())/.local/bin",
+            "/opt/homebrew/bin",
+            "/opt/homebrew/sbin",
+            "/usr/local/bin",
+            "/usr/bin",
+            "/bin",
+            "/usr/sbin",
+            "/sbin"
+        ].joined(separator: ":")
+        environment["PATH"] = expandedPath
+        task.environment = environment
         
         let pipe = Pipe()
         task.standardOutput = pipe

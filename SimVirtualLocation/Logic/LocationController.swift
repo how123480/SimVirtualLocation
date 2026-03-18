@@ -505,6 +505,14 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self = self else { return }
             
+            // Get full path to pymobiledevice3
+            guard let pymobilePath = self.runner.getFullPathOf("pymobiledevice3") else {
+                DispatchQueue.main.async {
+                    self.showAlert("pymobiledevice3 not found. Please install it using 'pip install pymobiledevice3' and ensure it's in your PATH.")
+                }
+                return
+            }
+            
             // Setup pipes
             let inputPipe = Pipe()
             let outputPipe = Pipe()
@@ -513,7 +521,7 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
             // Create sudo task with pymobiledevice3 command
             let sudoTask = Process()
             sudoTask.executableURL = URL(fileURLWithPath: "/usr/bin/sudo")
-            sudoTask.arguments = ["-S", "pymobiledevice3", "remote", "start-tunnel", "--protocol", "tcp"]
+            sudoTask.arguments = ["-S", pymobilePath, "remote", "start-tunnel", "--protocol", "tcp"]
             sudoTask.standardInput = inputPipe
             sudoTask.standardOutput = outputPipe
             sudoTask.standardError = errorPipe
