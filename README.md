@@ -12,6 +12,27 @@ You can dowload compiled and signed app [here](https://github.com/nexron171/SimV
 
 ![App Screen Shot](https://raw.githubusercontent.com/nexron171/SimVirtualLocation/master/assets/screenshot.png)
 
+## Quick Setup
+
+### Automated Installation (Recommended)
+Run the setup script to automatically install all required dependencies:
+
+```bash
+./scripts/setup.sh
+```
+
+This will install:
+- Xcode Command Line Tools
+- uv (modern Python package manager)
+- pymobiledevice3 latest version (for iOS device support, installed via `uv tool install`)
+
+### Check Your Environment
+To verify all dependencies are installed correctly:
+
+```bash
+./scripts/check-env.sh
+```
+
 ## Development
 This project supports both **Xcode** and **Swift Package Manager**:
 
@@ -38,19 +59,27 @@ For detailed Swift Package configuration, see [SWIFT_PACKAGE_SETUP.md](./SWIFT_P
 If you see an alert with warning that app is corrupted and Apple can not check the developer: try to press and hold `ctrl`, then click on SimVirtualLocation.app and select "Open", release `ctrl`. Now alert should have the "Open" button. Don't forget to copy app from dmg image to any place on your Mac.
 
 ### For iOS devices
-`python3` and `pymobiledevice3` are should be installed
+**Option 1: Automated Setup (Recommended)**
+```shell
+./setup.sh
+```
 
+**Option 2: Manual Installation**
 ```shell
 brew install python3 && python3 -m pip install -U pymobiledevice3
 ```
 
-For iOS Device - select device from dropdown and then click on Mound Developer Image. If you see an error that there is no appropriate image - download one from https://github.com/mspvirajpatel/Xcode_Developer_Disk_Images/releases if your iOS for example 16.5.1 and there is only 16.5 - it's ok, just copy and rename it to 16.5.1 and put it inside Xcode at `.../Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/DeviceSupport/`
+After installation:
+- For iOS Device - select device from dropdown and then click on Mount Developer Image
+- If you see an error that there is no appropriate image - download one from https://github.com/mspvirajpatel/Xcode_Developer_Disk_Images/releases
+- If your iOS version is (for example) 16.5.1 and there is only 16.5 - it's ok, just copy and rename it to 16.5.1 and put it inside Xcode at `.../Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/DeviceSupport/`
 
-For iOS 17+ select ckeckbox iOS 17+ and provide RSD Address and RSD Port from command:
+**For iOS 17+ devices:**
+Select checkbox "iOS 17+" and provide RSD Address and RSD Port from command:
 ```shell
-sudo python3 -m pymobiledevice3 remote start-tunnel
+sudo pymobiledevice3 remote start-tunnel
 ```
-It needs sudo, because it will instantiate low level connection between Mac and iPhone. Keep this command running while mocking location for iOS 17+.
+This needs sudo because it will instantiate a low level connection between Mac and iPhone. Keep this command running while mocking location for iOS 17+.
 
 ### If iOS device is unlisted
 
