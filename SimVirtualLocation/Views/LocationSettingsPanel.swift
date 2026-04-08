@@ -16,6 +16,14 @@ struct LocationSettingsPanel: View {
     @State private var longitude = ""
     @State private var latitudeLongitude = ""
     
+    // Disable location controls when in iOS device mode with RSD enabled but tunnel not connected
+    private var shouldDisableLocationControls: Bool {
+        return locationController.deviceType == 0 && // iOS
+               locationController.deviceMode == .device && // Device mode
+               locationController.useRSD && // iOS 17+
+               locationController.tunnelStatus != "Connected" // Tunnel not fully connected
+    }
+    
     var body: some View {
         VStack {
             GroupBox {
@@ -145,6 +153,8 @@ struct LocationSettingsPanel: View {
                 })
             }
         }
+        .disabled(shouldDisableLocationControls)
+        .opacity(shouldDisableLocationControls ? 0.5 : 1.0)
     }
 }
 
