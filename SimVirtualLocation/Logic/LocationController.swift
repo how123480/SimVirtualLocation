@@ -719,14 +719,17 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
     }
     
     func setToCoordinate(latString: String = "", lngString: String = "") {
-        var lat: Double = 0
-        var lng: Double = 0
+        // Parse latitude and longitude from strings
+        guard let lat = Double(latString), let lng = Double(lngString) else {
+            showAlert("Invalid number format. Please enter valid latitude and longitude.")
+            return
+        }
         
-        lat = Double(latString) ?? 0
-        lng = Double(lngString) ?? 0
-        
-        guard lat > 0, lng > 0 else {
-            showAlert("Current location is unavailable")
+        // Validate coordinate ranges
+        // Latitude: -90 (South Pole) to 90 (North Pole)
+        // Longitude: -180 (West) to 180 (East)
+        guard lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180 else {
+            showAlert("Invalid coordinate. Latitude must be between -90 and 90, longitude must be between -180 and 180.")
             return
         }
         
@@ -1047,7 +1050,12 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
         }
 
         if deviceType == 0 {
-            runner.resetIos(showAlert: showAlert)
+            runner.resetIos(
+                useRSD: useRSD,
+                RSDAddress: RSDAddress,
+                RSDPort: RSDPort,
+                showAlert: showAlert
+            )
         } else {
             runner.resetAndroid(adbDeviceId: adbDeviceId, adbPath: adbPath, showAlert: showAlert)
         }

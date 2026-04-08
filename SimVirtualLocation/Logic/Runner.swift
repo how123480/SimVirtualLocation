@@ -305,8 +305,46 @@ class Runner {
         }
     }
     
-    func resetIos(showAlert: (String) -> Void) {
+    func resetIos(
+        useRSD: Bool,
+        RSDAddress: String,
+        RSDPort: String,
+        showAlert: @escaping (String) -> Void
+    ) {
         stop()
+        
+        // Clear location simulation on iOS device
+        Task {
+            do {
+                var args = ["developer", "dvt", "simulate-location", "clear"]
+                
+                // Add RSD tunnel parameters if enabled
+                if useRSD && !RSDAddress.isEmpty && !RSDPort.isEmpty {
+                    args.append(contentsOf: ["--rsd", RSDAddress, RSDPort])
+                }
+                
+                let task = try await taskForIOS(args: args, showAlert: showAlert)
+                
+                let pipe = Pipe()
+                task.standardOutput = pipe
+                task.standardError = pipe
+                
+                try task.run()
+                task.waitUntilExit()
+                
+                let output = pipe.fileHandleForReading.readDataToEndOfFile()
+                pipe.fileHandleForReading.closeFile()
+                
+                if task.terminationStatus == 0 {
+                    log?("Successfully cleared iOS location simulation")
+                } else {
+                    let errorMessage = String(decoding: output, as: UTF8.self)
+                    log?("Failed to clear iOS location simulation: \(errorMessage)")
+                }
+            } catch {
+                log?("Error clearing iOS location simulation: \(error.localizedDescription)")
+            }
+        }
     }
     
     func resetAndroid(adbDeviceId: String, adbPath: String, showAlert: (String) -> Void) {
