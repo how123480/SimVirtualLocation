@@ -58,6 +58,7 @@ struct iOSDeviceSettings: View {
                     }
                     .buttonStyle(.borderedProminent)
                     .tint(locationController.isTunnelRunning ? .red : .blue)
+                    .id("tunnel-\(locationController.isTunnelRunning)")
                     
                     TextField("RSD Address", text: $locationController.RSDAddress)
                         .disabled(locationController.isTunnelRunning)

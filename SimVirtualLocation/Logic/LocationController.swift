@@ -40,13 +40,13 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
     @Published var pointsMode: PointsMode = .single {
         didSet { handlePointsModeChange() }
     }
-    @Published var deviceMode: DeviceMode = .simulator
+    @Published var deviceMode: DeviceMode = .device
     @Published var xcodePath: String = "/Applications/Xcode.app" {
         didSet { defaults.set(xcodePath, forKey: Constants.defaultsXcodePathKey) }
     }
 
     /// For iOS 17+
-    @Published var useRSD: Bool = false
+    @Published var useRSD: Bool = true
 
     @Published var bootedSimulators: [Simulator] = []
     @Published var selectedSimulator: String = ""
