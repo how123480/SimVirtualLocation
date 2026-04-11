@@ -53,6 +53,51 @@ swift test
 
 For detailed Swift Package configuration, see [SWIFT_PACKAGE_SETUP.md](./SWIFT_PACKAGE_SETUP.md)
 
+### Using Non-Xcode Editors (VS Code, Neovim, etc.)
+
+If you develop with editors other than Xcode, you need `buildServer.json` to enable **LSP (Language Server Protocol)** features such as code completion, jump-to-definition, and inline diagnostics.
+
+This file is the configuration for [xcode-build-server](https://github.com/SolaWing/xcode-build-server), which bridges **SourceKit-LSP** with Xcode's build system via **BSP (Build Server Protocol)**.
+
+#### Why is it needed?
+
+SourceKit-LSP relies on the **index store** that Xcode generates inside `DerivedData/` during compilation. The `buildServer.json` tells SourceKit-LSP where to find that index store through the `build_root` field. Without it, your editor cannot resolve types or navigate symbols.
+
+**Key fields that affect LSP indexing:**
+
+| Field | Purpose |
+|---|---|
+| `build_root` | Points to the DerivedData path. LSP reads the index store from here. **Most critical field.** |
+| `workspace` | Points to the `.xcworkspace`, used to resolve project structure and targets. |
+| `scheme` | Determines which scheme's build configuration and targets are used for indexing. |
+
+> **Important:** You must **build the project in Xcode at least once** before LSP can work. The index store is only generated during compilation. After a clean build or DerivedData reset, build again in Xcode to restore LSP functionality.
+
+#### How to Generate
+
+1. Install xcode-build-server:
+   ```bash
+   brew install xcode-build-server
+   ```
+
+2. Generate `buildServer.json` in the project root:
+   ```bash
+   xcode-build-server config -project SimVirtualLocation.xcodeproj -scheme SimVirtualLocation
+   ```
+
+3. (Optional) If using a workspace instead of a project:
+   ```bash
+   xcode-build-server config -workspace SimVirtualLocation.xcworkspace -scheme SimVirtualLocation
+   ```
+
+#### When to Regenerate
+
+- After DerivedData is cleaned or its hash path changes
+- After switching Xcode versions
+- After running `xcodebuild clean`
+
+> **Note:** `buildServer.json` is gitignored because it contains machine-specific absolute paths. Each developer must generate it locally.
+
 ## FAQ
 ---
 ### How to run
