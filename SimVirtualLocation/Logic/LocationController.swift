@@ -35,6 +35,11 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
 
     // MARK: - Publishers
 
+    // Feature toggles
+    @Published var showAndroidOption: Bool = false
+    @Published var showSimulatorOption: Bool = false
+    @Published var showIOS17Toggle: Bool = false
+    
     @Published var isSimulating = false
     @Published var speed: Double = 60.0
     @Published var pointsMode: PointsMode = .single {
@@ -526,7 +531,7 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
             sudoTask.standardOutput = outputPipe
             sudoTask.standardError = errorPipe
 
-            DispatchQueue.main.async {
+           DispatchQueue.main.async {
                 self.tunnelStatus = "Starting tunnel..."
             }
 
@@ -612,11 +617,11 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
 
     func stopRSDTunnel() {
         guard let process = tunnelProcess, process.isRunning else {
-            DispatchQueue.main.async {
+         DispatchQueue.main.async {
                 self.isTunnelRunning = false
                 self.tunnelStatus = ""
                 self.tunnelProcess = nil
-            }
+            }            
             return
         }
 

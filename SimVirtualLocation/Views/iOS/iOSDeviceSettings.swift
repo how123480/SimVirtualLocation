@@ -12,10 +12,12 @@ struct iOSDeviceSettings: View {
     
     var body: some View {
         GroupBox {
-            Picker("Device mode", selection: $locationController.deviceMode) {
-                Text("Simulator").tag(LocationController.DeviceMode.simulator)
-                Text("Device").tag(LocationController.DeviceMode.device)
-            }.labelsHidden().pickerStyle(.segmented)
+            if locationController.showSimulatorOption {
+                Picker("Device mode", selection: $locationController.deviceMode) {
+                    Text("Simulator").tag(LocationController.DeviceMode.simulator)
+                    Text("Device").tag(LocationController.DeviceMode.device)
+                }.labelsHidden().pickerStyle(.segmented)
+            }
 
             if locationController.deviceMode == .simulator {
                 Picker("Simulator:", selection: $locationController.selectedSimulator) {
@@ -34,8 +36,10 @@ struct iOSDeviceSettings: View {
             }
 
             if locationController.deviceMode == .device {
-                Toggle(isOn: $locationController.useRSD) {
-                    Text("iOS 17+")
+                if locationController.showIOS17Toggle {
+                    Toggle(isOn: $locationController.useRSD) {
+                        Text("iOS 17+")
+                    }
                 }
                 if locationController.useRSD {
                     Button(action: {

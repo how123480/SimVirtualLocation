@@ -56,10 +56,12 @@ struct ContentView: View {
                 }
 
                 VStack {
-                    Picker("Device mode", selection: $locationController.deviceType) {
-                        Text("iOS").tag(0)
-                        Text("Android").tag(1)
-                    }.labelsHidden().pickerStyle(.segmented)
+                    if locationController.showAndroidOption {
+                        Picker("Device mode", selection: $locationController.deviceType) {
+                            Text("iOS").tag(0)
+                            Text("Android").tag(1)
+                        }.labelsHidden().pickerStyle(.segmented)
+                    }
 
                     if locationController.deviceType == 0 {
                         iOSPanel()
