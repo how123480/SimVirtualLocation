@@ -15,7 +15,7 @@
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "ED87CA1727B1B42F001315D7"
-               BuildableName = "SimVirtualLocation.app"
+               BuildableName = "SkyWalker.app"
                BlueprintName = "SimVirtualLocation"
                ReferencedContainer = "container:SimVirtualLocation.xcodeproj">
             </BuildableReference>
@@ -45,7 +45,7 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "ED87CA1727B1B42F001315D7"
-            BuildableName = "SimVirtualLocation.app"
+            BuildableName = "SkyWalker.app"
             BlueprintName = "SimVirtualLocation"
             ReferencedContainer = "container:SimVirtualLocation.xcodeproj">
          </BuildableReference>
@@ -69,7 +69,7 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "ED87CA1727B1B42F001315D7"
-            BuildableName = "SimVirtualLocation.app"
+            BuildableName = "SkyWalker.app"
             BlueprintName = "SimVirtualLocation"
             ReferencedContainer = "container:SimVirtualLocation.xcodeproj">
          </BuildableReference>
