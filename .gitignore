@@ -1,6 +1,7 @@
 SimVirtualLocation.xcodeproj/xcuserdata
 SimVirtualLocation.xcodeproj/project.pbxproj
 DerivedData
+buildServer.json
 
 # Swift Package Manager
 .build/
