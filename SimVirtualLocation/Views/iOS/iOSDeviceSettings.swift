@@ -36,66 +36,43 @@ struct iOSDeviceSettings: View {
             }
 
             if locationController.deviceMode == .device {
-                if locationController.showIOS17Toggle {
-                    Toggle(isOn: $locationController.useRSD) {
-                        Text("iOS 17+")
+                Picker("Device:", selection: $locationController.selectedDevice) {
+                    ForEach(locationController.connectedDevices, id: \.id) { device in
+                        Text("\(device.name) (\(device.version))")
                     }
                 }
-                if locationController.useRSD {
-                    Button(action: {
-                        if locationController.isTunnelRunning {
-                            locationController.stopRSDTunnel()
-                        } else {
-                            locationController.startRSDTunnel()
-                        }
-                    }) {
-                        HStack {
-                            Image(systemName: locationController.isTunnelRunning ? "stop.circle.fill" : "play.circle.fill")
-                            Text(locationController.isTunnelRunning ? "Stop Tunnel" : "Start Tunnel")
-                            if !locationController.tunnelStatus.isEmpty {
-                                Text("(\(locationController.tunnelStatus))")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                            }
-                        }
-                        .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(locationController.isTunnelRunning ? .red : .blue)
-                    .id("tunnel-\(locationController.isTunnelRunning)")
-                    
-                    TextField("RSD Address", text: $locationController.RSDAddress)
-                        .disabled(locationController.isTunnelRunning)
-                    TextField("RSD Port", text: $locationController.RSDPort)
-                        .disabled(locationController.isTunnelRunning)
-                } else {
-                    TextField("Xcode path", text: $locationController.xcodePath)
-                    Picker("Device:", selection: $locationController.selectedDevice) {
-                        ForEach(locationController.connectedDevices, id: \.id) { device in
-                            Text("\(device.name) (\(device.version))")
-                        }
-                    }
 
-                    Button(action: {
+                Button(action: {
+                    Task {
+                        await locationController.refreshDevices()
+                    }
+                }, label: {
+                    Text("Refresh").frame(maxWidth: .infinity)
+                })
+                
+                Button(action: {
+                    if locationController.isDeviceActive {
                         Task {
-                            await locationController.refreshDevices()
+                            await locationController.stopDevice()
                         }
-                    }, label: {
-                        Text("Refresh").frame(maxWidth: .infinity)
-                    })
-
-                    Button(action: {
-                        locationController.mountDeveloperImage()
-                    }, label: {
-                        Text("Mount Developer Image").frame(maxWidth: .infinity)
-                    })
-
-                    Button(action: {
-                        locationController.unmountDeveloperImage()
-                    }, label: {
-                        Text("Unmount Developer Image").frame(maxWidth: .infinity)
-                    })
+                    } else {
+                        locationController.startDevice()
+                    }
+                }) {
+                    HStack {
+                        Image(systemName: locationController.isDeviceActive ? "stop.circle.fill" : "play.circle.fill")
+                        Text(locationController.isDeviceActive ? "Stop" : "Start")
+                        if !locationController.tunnelStatus.isEmpty {
+                            Text("(\(locationController.tunnelStatus))")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                    .frame(maxWidth: .infinity)
                 }
+                .buttonStyle(.borderedProminent)
+                .tint(locationController.isDeviceActive ? .red : .blue)
+                .id("device-active-\(locationController.isDeviceActive)")
             }
         }
     }

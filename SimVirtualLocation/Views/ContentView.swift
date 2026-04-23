@@ -12,12 +12,16 @@ struct ContentView: View {
 
     let mapView: MapView
     @ObservedObject var locationController: LocationController
+    @State private var showSidePanel: Bool = true
 
     var body: some View {
         VStack {
-            HStack(alignment: .top, spacing: 0) {
+            ZStack(alignment: .topLeading) {
+                // 地圖底層
                 ZStack(alignment: .bottomTrailing) {
                     mapView.frame(minWidth: 400)
+                    
+                    // 地圖縮放按鈕
                     VStack {
                         Image(systemName: "plus")
                             .foregroundColor(Color.white)
@@ -52,81 +56,225 @@ struct ContentView: View {
                             .onTapGesture {
                                 locationController.updateMapRegion(force: true)
                             }
-                    }.padding()
+                    }
+                    .padding()
+                    .padding(.bottom, 20)
+                    .padding(.trailing, showSidePanel ? 360 : 0) 
+                    .animation(.spring(), value: showSidePanel)
                 }
 
-                VStack {
-                    if locationController.showAndroidOption {
-                        Picker("Device mode", selection: $locationController.deviceType) {
-                            Text("iOS").tag(0)
-                            Text("Android").tag(1)
-                        }.labelsHidden().pickerStyle(.segmented)
-                    }
-
-                    if locationController.deviceType == 0 {
-                        iOSPanel()
-                            .environmentObject(locationController)
-                    } else {
-                        AndroidPanel()
-                            .environmentObject(locationController)
-                    }
-
-                }.frame(width: 250)
-                    .padding(EdgeInsets(top: 16, leading: 16, bottom: 16, trailing: 0))
-
-                LocationsView()
-                    .environmentObject(locationController)
-                    .frame(width: 300)
-                    .padding(EdgeInsets(top: 16, leading: 16, bottom: 16, trailing: 16))
-
-            }.frame(minWidth: 1100, minHeight: 500)
-                .onAppear {
-                    locationController.updateMapRegion()
-                }
-                .modifier(Alert(isPresented: $locationController.showingAlert, text: locationController.alertText))
-
-            ScrollView {
+                // 搜尋框 (左上)
                 VStack(alignment: .leading, spacing: 0) {
-                    ForEach(locationController.logs) { log in
-                        HStack(spacing: 0) {
-                            Text(locationController.dateFormatter.string(from: log.date))
-                                .padding(2)
-                            Text(log.message)
-                                .lineLimit(nil)
-                                .multilineTextAlignment(.leading)
-                                .padding(2)
+                    HStack {
+                        Image(systemName: "magnifyingglass")
+                            .foregroundColor(.gray)
+                        TextField("Search location...", text: $locationController.searchQuery)
+                            .textFieldStyle(PlainTextFieldStyle())
+                            .padding(8)
+                    }
+                    .background(Color(NSColor.windowBackgroundColor).opacity(0.9))
+                    .cornerRadius(8)
+                    .padding()
 
-                            Spacer()
+                    if !locationController.searchResults.isEmpty && !locationController.searchQuery.isEmpty {
+                        ScrollView {
+                            LazyVStack(alignment: .leading, spacing: 0) {
+                                ForEach(locationController.searchResults, id: \.self) { completion in
+                                    Button(action: {
+                                        locationController.selectSearchCompletion(completion)
+                                    }) {
+                                        HStack(spacing: 12) {
+                                            Image(systemName: completion.subtitle.contains(",") ? "building.2.fill" : "mappin.and.ellipse")
+                                                .foregroundColor(.blue)
+                                                .frame(width: 20)
+
+                                            VStack(alignment: .leading) {
+                                                Text(completion.title)
+                                                    .font(.headline)
+                                                    .foregroundColor(.primary)
+                                                if !completion.subtitle.isEmpty {
+                                                    Text(completion.subtitle)
+                                                        .font(.subheadline)
+                                                        .foregroundColor(.secondary)
+                                                }
+                                            }
+                                        }
+                                        .padding(.vertical, 8)
+                                        .padding(.horizontal)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .contentShape(Rectangle())
+                                    }
+                                    .buttonStyle(PlainButtonStyle())
+                                    Divider()
+                                }
+                            }
                         }
-                        .frame(maxWidth: .infinity)
-                        .background(Color.gray.opacity(0.3))
-                        .cornerRadius(4)
-                        .padding(4)
+                        .frame(maxHeight: 300)
+                        .background(Color(NSColor.windowBackgroundColor).opacity(0.9))
+                        .cornerRadius(8)
+                        .padding(.horizontal)
                     }
                 }
-                .frame(maxWidth: .infinity)
-            }.frame(maxWidth: .infinity, maxHeight: 100)
+                .frame(width: 300)
 
-            Button("Copy logs") {
-                let log = locationController.logs.map { entry in
-                    let date = locationController.dateFormatter.string(from: entry.date)
-                    let message = entry.message
+                // 右側收合按鈕與面板
+                HStack(spacing: 0) {
+                    Spacer()
+                        .allowsHitTesting(false) // 讓點擊穿透 Spacer 到地圖與按鈕
+                    
+                    // 收合按鈕 (拉桿) - 稍微加寬並美化
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 12)
+                            .fill(.ultraThinMaterial)
+                            .frame(width: 28, height: 80)
+                            .shadow(radius: 5)
+                        
+                        Image(systemName: showSidePanel ? "chevron.right" : "chevron.left")
+                            .font(.system(size: 14, weight: .bold))
+                            .foregroundColor(.secondary)
+                    }
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        withAnimation(.spring()) {
+                            showSidePanel.toggle()
+                        }
+                    }
+                    .padding(.trailing, showSidePanel ? -14 : 10) // 展開時讓拉桿與面板重疊，收合時靠右邊緣
+                    .zIndex(1)
 
-                    return "\(date): \(message)"
-                }.joined(separator: "\n\n")
+                    if showSidePanel {
+                        HStack(alignment: .top, spacing: 0) {
+                            HStack(alignment: .top, spacing: 0) {
+                                // 設定面板 (Control Panel)
+                                VStack(spacing: 16) {
+                                    if locationController.showAndroidOption {
+                                        Picker("Device mode", selection: $locationController.deviceType) {
+                                            Text("iOS").tag(0)
+                                            Text("Android").tag(1)
+                                        }.labelsHidden().pickerStyle(.segmented)
+                                    }
 
-                let pasteboard = NSPasteboard.general
-                pasteboard.declareTypes([.string], owner: nil)
+                                    if locationController.deviceType == 0 {
+                                        iOSPanel()
+                                            .environmentObject(locationController)
+                                    } else {
+                                        AndroidPanel()
+                                            .environmentObject(locationController)
+                                    }
 
-                pasteboard.setString(log, forType: .string)
-            }.padding()
-        }.frame(minHeight: 800)
+                                    Spacer()
+
+                                    Button(action: {
+                                        let log = locationController.logs.map { entry in
+                                            let date = locationController.dateFormatter.string(from: entry.date)
+                                            let message = entry.message
+                                            return "\(date): \(message)"
+                                        }.joined(separator: "\n\n")
+                                        let pasteboard = NSPasteboard.general
+                                        pasteboard.declareTypes([.string], owner: nil)
+                                        pasteboard.setString(log, forType: .string)
+                                    }) {
+                                        HStack {
+                                            Image(systemName: "doc.on.doc")
+                                            Text("Logs")
+                                        }
+                                        .frame(maxWidth: .infinity)
+                                    }
+                                    .buttonStyle(.bordered)
+                                }
+                                .frame(width: 300)
+                                .padding(20)
+                            }
+                            .background(
+                                ZStack {
+                                    Color.gray.opacity(0.15) // 透明灰
+                                    Rectangle().fill(.ultraThinMaterial)
+                                }
+                            )
+                            .cornerRadius(20)
+                            .shadow(color: Color.black.opacity(0.2), radius: 15, x: -5, y: 5)
+                            .padding(.vertical, 40)
+                            .padding(.trailing, 20)
+                        }
+                        .transition(.move(edge: .trailing).combined(with: .opacity))
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+            .frame(minWidth: 800, minHeight: 500)
+            .animation(.spring(), value: showSidePanel)
+            .modifier(Alert(isPresented: $locationController.showingAlert, text: locationController.alertText))
+        }
+        .frame(minHeight: 800)
     }
 
     init(mapView: MapView, locationController: LocationController) {
         self.mapView = mapView
         self.locationController = locationController
     }
+}
+
+// 輔助擴展，用於自定義圓角
+extension View {
+    func cornerRadius(_ radius: CGFloat, corners: RectCorner) -> some View {
+        clipShape(RoundedCorner(radius: radius, corners: corners))
+    }
+}
+
+struct RoundedCorner: Shape {
+    var radius: CGFloat = .infinity
+    var corners: RectCorner = .allCorners
+
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+
+        let p1 = CGPoint(x: rect.minX, y: rect.minY)
+        let p2 = CGPoint(x: rect.maxX, y: rect.minY)
+        let p3 = CGPoint(x: rect.maxX, y: rect.maxY)
+        let p4 = CGPoint(x: rect.minX, y: rect.maxY)
+
+        path.move(to: CGPoint(x: rect.minX + radius, y: rect.minY))
+
+        if corners.contains(.topRight) {
+            path.addLine(to: CGPoint(x: rect.maxX - radius, y: rect.minY))
+            path.addArc(center: CGPoint(x: rect.maxX - radius, y: rect.minY + radius), radius: radius, startAngle: Angle(degrees: -90), endAngle: Angle(degrees: 0), clockwise: false)
+        } else {
+            path.addLine(to: p2)
+        }
+
+        if corners.contains(.bottomRight) {
+            path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY - radius))
+            path.addArc(center: CGPoint(x: rect.maxX - radius, y: rect.maxY - radius), radius: radius, startAngle: Angle(degrees: 0), endAngle: Angle(degrees: 90), clockwise: false)
+        } else {
+            path.addLine(to: p3)
+        }
+
+        if corners.contains(.bottomLeft) {
+            path.addLine(to: CGPoint(x: rect.minX + radius, y: rect.maxY))
+            path.addArc(center: CGPoint(x: rect.minX + radius, y: rect.maxY - radius), radius: radius, startAngle: Angle(degrees: 90), endAngle: Angle(degrees: 180), clockwise: false)
+        } else {
+            path.addLine(to: p4)
+        }
+
+        if corners.contains(.topLeft) {
+            path.addLine(to: CGPoint(x: rect.minX, y: rect.minY + radius))
+            path.addArc(center: CGPoint(x: rect.minX + radius, y: rect.minY + radius), radius: radius, startAngle: Angle(degrees: 180), endAngle: Angle(degrees: 270), clockwise: false)
+        } else {
+            path.addLine(to: p1)
+        }
+
+        path.closeSubpath()
+        return path
+    }
+}
+
+struct RectCorner: OptionSet {
+    let rawValue: Int
+    static let topLeft = RectCorner(rawValue: 1 << 0)
+    static let topRight = RectCorner(rawValue: 1 << 1)
+    static let bottomLeft = RectCorner(rawValue: 1 << 2)
+    static let bottomRight = RectCorner(rawValue: 1 << 3)
+    static let allCorners: RectCorner = [.topLeft, .topRight, .bottomLeft, .bottomRight]
 }
 
 struct ContentView_Previews: PreviewProvider {
