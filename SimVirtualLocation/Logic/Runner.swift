@@ -95,6 +95,7 @@ class Runner {
     
     func runOnIos(
         location: CLLocationCoordinate2D,
+        udid: String,
         showAlert: @escaping (String) -> Void
     ) async throws {
         self.isStopped = false
@@ -108,6 +109,8 @@ class Runner {
                 "developer",
                 "simulate-location",
                 "set",
+                "--udid",
+                udid,
                 "--",
                 "\(String(format: "%.5f", location.latitude))",
                 "\(String(format: "%.5f", location.longitude))"
@@ -115,7 +118,7 @@ class Runner {
             showAlert: showAlert
         )
 
-        self.log?("set iOS location \(location.description)")
+        self.log?("set iOS location \(location.description) for device \(udid)")
         self.log?("task: \(task.logDescription)")
 
         self.currentTask = task
@@ -144,7 +147,7 @@ class Runner {
 
             // Only show errors if task wasn't terminated (exit code 15 = SIGTERM)
             // When terminated by stopCurrentTask(), SSL errors are expected and should be ignored
-            if task.terminationStatus != 15 {
+            if task.terminationStatus != 0 && task.terminationStatus != 15 {
                 if let errorData = try errorPipe.fileHandleForReading.readToEnd() {
                     let error = String(decoding: errorData, as: UTF8.self)
 
@@ -155,7 +158,7 @@ class Runner {
                         self.log?("Suppressed benign warning: \(error.prefix(100))...")
                     }
                 }
-            } else {
+            } else if task.terminationStatus == 15 {
                 self.log?("Task terminated (exit code 15), errors suppressed")
             }
         } catch {
@@ -167,6 +170,7 @@ class Runner {
 
     func runOnNewIos(
         location: CLLocationCoordinate2D,
+        udid: String,
         RSDAddress: String,
         RSDPort: String,
         showAlert: @escaping (String) -> Void
@@ -198,7 +202,7 @@ class Runner {
             showAlert: showAlert
         )
 
-        self.log?("set iOS location \(location.description)")
+        self.log?("set iOS location \(location.description) for device \(udid)")
         self.log?("task: \(task.logDescription)")
 
         self.currentTask = task
@@ -227,7 +231,7 @@ class Runner {
 
             // Only show errors if task wasn't terminated (exit code 15 = SIGTERM)
             // When terminated by stopCurrentTask(), SSL errors are expected and should be ignored
-            if task.terminationStatus != 15 {
+            if task.terminationStatus != 0 && task.terminationStatus != 15 {
                 if let errorData = try errorPipe.fileHandleForReading.readToEnd() {
                     let error = String(decoding: errorData, as: UTF8.self)
 
@@ -238,7 +242,7 @@ class Runner {
                         self.log?("Suppressed benign warning: \(error.prefix(100))...")
                     }
                 }
-            } else {
+            } else if task.terminationStatus == 15 {
                 self.log?("Task terminated (exit code 15), errors suppressed")
             }
         } catch {
@@ -306,44 +310,44 @@ class Runner {
     }
     
     func resetIos(
+        udid: String,
         useRSD: Bool,
         RSDAddress: String,
         RSDPort: String,
         showAlert: @escaping (String) -> Void
-    ) {
+    ) async {
         stop()
         
         // Clear location simulation on iOS device
-        Task {
-            do {
-                var args = ["developer", "dvt", "simulate-location", "clear"]
-                
-                // Add RSD tunnel parameters if enabled
-                if useRSD && !RSDAddress.isEmpty && !RSDPort.isEmpty {
-                    args.append(contentsOf: ["--rsd", RSDAddress, RSDPort])
-                }
-                
-                let task = try await taskForIOS(args: args, showAlert: showAlert)
-                
-                let pipe = Pipe()
-                task.standardOutput = pipe
-                task.standardError = pipe
-                
-                try task.run()
-                task.waitUntilExit()
-                
-                let output = pipe.fileHandleForReading.readDataToEndOfFile()
-                pipe.fileHandleForReading.closeFile()
-                
-                if task.terminationStatus == 0 {
-                    log?("Successfully cleared iOS location simulation")
-                } else {
-                    let errorMessage = String(decoding: output, as: UTF8.self)
-                    log?("Failed to clear iOS location simulation: \(errorMessage)")
-                }
-            } catch {
-                log?("Error clearing iOS location simulation: \(error.localizedDescription)")
+        do {
+            var args: [String] = []
+            
+            if useRSD && !RSDAddress.isEmpty && !RSDPort.isEmpty {
+                args = ["developer", "dvt", "simulate-location", "clear", "--rsd", RSDAddress, RSDPort]
+            } else {
+                args = ["developer", "simulate-location", "clear", "--udid", udid]
             }
+            
+            let task = try await taskForIOS(args: args, showAlert: showAlert)
+            
+            let pipe = Pipe()
+            task.standardOutput = pipe
+            task.standardError = pipe
+            
+            try task.run()
+            task.waitUntilExit()
+            
+            let output = pipe.fileHandleForReading.readDataToEndOfFile()
+            pipe.fileHandleForReading.closeFile()
+            
+            if task.terminationStatus == 0 {
+                log?("Successfully cleared iOS location simulation")
+            } else {
+                let errorMessage = String(decoding: output, as: UTF8.self)
+                log?("Failed to clear iOS location simulation: \(errorMessage)")
+            }
+        } catch {
+            log?("Error clearing iOS location simulation: \(error.localizedDescription)")
         }
     }
     
