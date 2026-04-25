@@ -22,15 +22,12 @@ class Runner {
     private var idevicelocationPath: URL?
 
     private var currentTask: Process?
-    private var tasks: [Process] = []
-    private let maxTasksCount = 10
-
-    private var isStopped: Bool = false
 
     // MARK: - Internal Methods
-    
+
     /// Filters out known benign warnings from error messages
     private func shouldSuppressError(_ error: String) -> Bool {
+
         // Suppress urllib3 OpenSSL/LibreSSL warnings (common on macOS)
         if error.contains("NotOpenSSLWarning") || 
            error.contains("urllib3 v2 only supports OpenSSL") ||
@@ -46,13 +43,6 @@ class Runner {
         return false
     }
 
-    func stop() {
-        tasks.forEach { $0.terminate() }
-        tasks = []
-
-        isStopped = true
-    }
-    
     func stopCurrentTask() async {
         guard let task = currentTask, task.isRunning else {
             return
@@ -98,12 +88,6 @@ class Runner {
         udid: String,
         showAlert: @escaping (String) -> Void
     ) async throws {
-        self.isStopped = false
-
-        guard !self.isStopped else {
-            return
-        }
-
         let task = try await self.taskForIOS(
             args: [
                 "developer",
@@ -133,12 +117,6 @@ class Runner {
 
         do {
             try task.run()
-            self.runnerQueue.async {
-                if self.tasks.count > self.maxTasksCount {
-                    self.stop()
-                }
-                self.tasks.append(task)
-            }
 
             task.waitUntilExit()
             
@@ -180,12 +158,6 @@ class Runner {
             return
         }
 
-        self.isStopped = false
-
-        guard !self.isStopped else {
-            return
-        }
-
         let task = try await self.taskForIOS(
             args: [
                 "developer",
@@ -217,12 +189,6 @@ class Runner {
 
         do {
             try task.run()
-            self.runnerQueue.async {
-                if self.tasks.count > self.maxTasksCount {
-                    self.stop()
-                }
-                self.tasks.append(task)
-            }
 
             task.waitUntilExit()
             
@@ -316,7 +282,7 @@ class Runner {
         RSDPort: String,
         showAlert: @escaping (String) -> Void
     ) async {
-        stop()
+        await stopCurrentTask()
         
         // Clear location simulation on iOS device
         do {

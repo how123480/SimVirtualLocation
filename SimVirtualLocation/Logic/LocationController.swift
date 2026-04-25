@@ -422,7 +422,9 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
     func stopSimulation(clearAnnotations: Bool = true) {
         isSimulating = false
         simulationType = .none
-        runner.stop()
+        Task {
+            await runner.stopCurrentTask()
+        }
         timer?.invalidate()
         timer = nil
         
@@ -612,7 +614,7 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
 
     private func stopLegacyDevice() async {
         isSimulating = false
-        runner.stop()
+        await runner.stopCurrentTask()
 
         await runner.resetIos(
             udid: selectedDevice,
@@ -771,7 +773,7 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
     func stopRSDTunnel() async {
         // 1. Stop any running simulation
         isSimulating = false
-        runner.stop()
+        await runner.stopCurrentTask()
 
         // 2. Clear location simulation on the device (while tunnel is still alive)
         guard let process = tunnelProcess, process.isRunning else {
