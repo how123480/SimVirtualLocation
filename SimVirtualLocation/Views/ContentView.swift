@@ -68,6 +68,7 @@ struct ContentView: View {
                     HStack {
                         Image(systemName: "magnifyingglass")
                             .foregroundColor(.gray)
+                            .padding(.leading, 12)
                         TextField("Search location...", text: $locationController.searchQuery)
                             .textFieldStyle(PlainTextFieldStyle())
                             .padding(8)
