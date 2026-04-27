@@ -53,51 +53,6 @@ swift test
 
 For detailed Swift Package configuration, see [SWIFT_PACKAGE_SETUP.md](./SWIFT_PACKAGE_SETUP.md)
 
-### Using Non-Xcode Editors (VS Code, Neovim, etc.)
-
-If you develop with editors other than Xcode, you need `buildServer.json` to enable **LSP (Language Server Protocol)** features such as code completion, jump-to-definition, and inline diagnostics.
-
-This file is the configuration for [xcode-build-server](https://github.com/SolaWing/xcode-build-server), which bridges **SourceKit-LSP** with Xcode's build system via **BSP (Build Server Protocol)**.
-
-#### Why is it needed?
-
-SourceKit-LSP relies on the **index store** that Xcode generates inside `DerivedData/` during compilation. The `buildServer.json` tells SourceKit-LSP where to find that index store through the `build_root` field. Without it, your editor cannot resolve types or navigate symbols.
-
-**Key fields that affect LSP indexing:**
-
-| Field | Purpose |
-|---|---|
-| `build_root` | Points to the DerivedData path. LSP reads the index store from here. **Most critical field.** |
-| `workspace` | Points to the `.xcworkspace`, used to resolve project structure and targets. |
-| `scheme` | Determines which scheme's build configuration and targets are used for indexing. |
-
-> **Important:** You must **build the project in Xcode at least once** before LSP can work. The index store is only generated during compilation. After a clean build or DerivedData reset, build again in Xcode to restore LSP functionality.
-
-#### How to Generate
-
-1. Install xcode-build-server:
-   ```bash
-   brew install xcode-build-server
-   ```
-
-2. Generate `buildServer.json` in the project root:
-   ```bash
-   xcode-build-server config -project SimVirtualLocation.xcodeproj -scheme SimVirtualLocation
-   ```
-
-3. (Optional) If using a workspace instead of a project:
-   ```bash
-   xcode-build-server config -workspace SimVirtualLocation.xcworkspace -scheme SimVirtualLocation
-   ```
-
-#### When to Regenerate
-
-- After DerivedData is cleaned or its hash path changes
-- After switching Xcode versions
-- After running `xcodebuild clean`
-
-> **Note:** `buildServer.json` is gitignored because it contains machine-specific absolute paths. Each developer must generate it locally.
-
 ## FAQ
 ---
 ### How to run
@@ -129,6 +84,17 @@ This needs sudo because it will instantiate a low level connection between Mac a
 ### If iOS device is unlisted
 
 Try to refresh list and if it does not help - go to Settings / Developer on iPhone and click Clear trusted computers. Replug cable and press refresh. If it still not in list - go to Xcode / Devices and simulators and check your device, there are should not be any yellow messages. If it has - make all that it requires.
+
+### iPhone 上找不到「開發者模式」選項？
+
+如果您在「設定 > 隱私權與安全性」中找不到「開發者模式」切換開關，這是正常現象。Apple 為了安全起見，預設會隱藏此選項。
+
+**解決步驟：**
+1.  **連接電腦**：使用傳輸線將 iPhone 連接到已安裝 Xcode 的 Mac。
+2.  **信任電腦**：在手機上點選「信任此電腦」並輸入密碼。
+3.  **啟用 App**：在本程式中選擇您的設備，並點擊 **"Connect"** (或 **"Mount Developer Image"**)。
+4.  **重新查看**：完成上述步驟後，「開發者模式」開關會自動出現在「設定 > 隱私權與安全性」的最下方。
+5.  **開啟並重啟**：開啟開關後，手機會要求重新啟動，重啟完成後再次確認開啟即可。
 
 ---
 ### For Android

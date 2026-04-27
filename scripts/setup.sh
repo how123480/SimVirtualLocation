@@ -1,14 +1,26 @@
 #!/bin/bash
 
-# SimVirtualLocation Setup Script
-# This script installs all necessary dependencies for the SimVirtualLocation app
+# SkyWalker Setup Script
+# This script installs all necessary dependencies for the SkyWalker app
 # Created: 2026-03-21
 #
 # Target Versions:
 # - uv: latest
-# - pymobiledevice3: latest (installed via uv tool)
+# - Python: 3.13 (installed via uv)
+# - pymobiledevice3: latest (installed via uv tool with Python 3.13)
 
-set -e  # Exit on error
+# Set TERM environment variable if not set (needed for installer environment)
+export TERM="${TERM:-dumb}"
+
+# Detect if running in installer environment (non-interactive)
+if [ ! -t 0 ] || [ -n "$INSTALLER_TEMP" ] || [ "$COMMAND_LINE_INSTALL" = "1" ]; then
+    INSTALLER_MODE=1
+    # In installer mode, don't exit on error for non-critical operations
+    set +e
+else
+    INSTALLER_MODE=0
+    set -e  # Exit on error in interactive mode
+fi
 
 # Colors for output
 RED='\033[0;31m'
@@ -20,6 +32,14 @@ NC='\033[0m' # No Color
 # Script directory
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VENV_DIR="$SCRIPT_DIR/SimVirtualLocation/.venv"
+
+# Log file for installer mode
+if [ "$INSTALLER_MODE" = "1" ]; then
+    LOG_FILE="/tmp/skywalker-setup-$$.log"
+    exec 1> >(tee -a "$LOG_FILE")
+    exec 2>&1
+    echo "Running in installer mode. Log: $LOG_FILE"
+fi
 
 # Print functions
 print_header() {
@@ -65,6 +85,12 @@ check_xcode_tools() {
 # Install Xcode Command Line Tools
 install_xcode_tools() {
     print_header "Installing Xcode Command Line Tools"
+    
+    if [ "$INSTALLER_MODE" = "1" ]; then
+        print_warning "Running in installer mode - skipping interactive Xcode Command Line Tools installation"
+        print_info "Please install Xcode Command Line Tools manually by running: xcode-select --install"
+        return 1
+    fi
     
     print_info "This will open a dialog to install Xcode Command Line Tools"
     print_info "Please follow the installation wizard..."
@@ -114,6 +140,41 @@ install_uv() {
     fi
 }
 
+# Check if Python 3.13 is installed via uv
+check_python313() {
+    print_header "Checking Python 3.13"
+    
+    if command_exists uv; then
+        if uv python list 2>/dev/null | grep -q "3.13"; then
+            print_success "Python 3.13 is available"
+            return 0
+        else
+            print_warning "Python 3.13 is not installed"
+            return 1
+        fi
+    else
+        print_warning "uv not found, cannot check Python 3.13"
+        return 1
+    fi
+}
+
+# Install Python 3.13 via uv
+install_python313() {
+    print_header "Installing Python 3.13"
+    
+    print_info "Installing Python 3.13 via uv..."
+    uv python install 3.13
+    
+    if uv python list 2>/dev/null | grep -q "3.13"; then
+        print_success "Python 3.13 installed successfully"
+        local python_info=$(uv python list 2>/dev/null | grep "3.13" | head -n 1)
+        print_info "$python_info"
+    else
+        print_error "Failed to install Python 3.13"
+        exit 1
+    fi
+}
+
 # Check if pymobiledevice3 is installed
 check_pymobiledevice3() {
     print_header "Checking pymobiledevice3"
@@ -135,22 +196,29 @@ check_pymobiledevice3() {
 
 # Install pymobiledevice3
 install_pymobiledevice3() {
-    print_header "Installing pymobiledevice3"
+    print_header "Installing pymobiledevice3 with Python 3.13"
     
     # Check if already installed via uv tool
     if uv tool list 2>/dev/null | grep -q "pymobiledevice3"; then
-        print_info "Upgrading pymobiledevice3 to latest version..."
-        uv tool upgrade pymobiledevice3
-    else
-        print_info "Installing pymobiledevice3 (latest) with uv tool..."
-        uv tool install pymobiledevice3
+        print_info "pymobiledevice3 is already installed, reinstalling with Python 3.13..."
+        uv tool uninstall pymobiledevice3 2>/dev/null || true
     fi
+    
+    print_info "Installing pymobiledevice3 with Python 3.13..."
+    # Install with specific Python version and force flag
+    uv tool install --python 3.13 pymobiledevice3 --force
     
     # Verify installation
     if command_exists pymobiledevice3 || [[ -f "$HOME/.local/bin/pymobiledevice3" ]]; then
-        print_success "pymobiledevice3 installed successfully"
+        print_success "pymobiledevice3 installed successfully with Python 3.13"
         local pmd3_location=$(which pymobiledevice3 2>/dev/null || echo "$HOME/.local/bin/pymobiledevice3")
         print_info "Location: $pmd3_location"
+        
+        # Verify Python version used
+        if [[ -f "$HOME/.local/share/uv/tools/pymobiledevice3/bin/python" ]]; then
+            local python_version=$($HOME/.local/share/uv/tools/pymobiledevice3/bin/python --version 2>&1)
+            print_info "Python version: $python_version"
+        fi
     else
         print_error "Failed to install pymobiledevice3"
         print_info "You may need to add ~/.local/bin to your PATH"
@@ -178,6 +246,12 @@ verify_installations() {
         print_success "pymobiledevice3: $pmd3_version"
         local pmd3_location=$(which pymobiledevice3 2>/dev/null || echo "$HOME/.local/bin/pymobiledevice3")
         print_success "Location: $pmd3_location"
+        
+        # Check Python version used by pymobiledevice3
+        if [[ -f "$HOME/.local/share/uv/tools/pymobiledevice3/bin/python" ]]; then
+            local python_version=$($HOME/.local/share/uv/tools/pymobiledevice3/bin/python --version 2>&1)
+            print_success "Uses: $python_version"
+        fi
     else
         print_error "pymobiledevice3 not found"
         all_good=false
@@ -202,31 +276,70 @@ verify_installations() {
 
 # Main installation flow
 main() {
-    clear
+    # Clear screen only if in interactive mode and terminal supports it
+    if [ "$INSTALLER_MODE" = "0" ] && [ -t 0 ] && command_exists clear; then
+        clear
+    fi
+    
     echo ""
-    print_header "SimVirtualLocation Setup Script"
-    echo ""
-    print_info "This script will install all necessary dependencies for SimVirtualLocation"
+    print_header "SkyWalker Setup Script"
     echo ""
     
-    # Check and install Xcode Command Line Tools
-    if ! check_xcode_tools; then
-        install_xcode_tools
+    if [ "$INSTALLER_MODE" = "1" ]; then
+        print_info "Running in installer mode (non-interactive)"
+    else
+        print_info "Running in interactive mode"
     fi
+    
+    print_info "This script will install all necessary dependencies for SkyWalker"
+    echo ""
     
     # Check and install uv
     if ! check_uv; then
-        install_uv
+        install_uv || {
+            if [ "$INSTALLER_MODE" = "1" ]; then
+                print_warning "Failed to install uv, but continuing..."
+            else
+                print_error "Failed to install uv"
+                return 1
+            fi
+        }
+    fi
+    
+    # Check and install Python 3.13
+    if ! check_python313; then
+        install_python313 || {
+            if [ "$INSTALLER_MODE" = "1" ]; then
+                print_warning "Failed to install Python 3.13, but continuing..."
+            else
+                print_error "Failed to install Python 3.13"
+                return 1
+            fi
+        }
     fi
     
     # Check and install pymobiledevice3
     if ! check_pymobiledevice3; then
-        install_pymobiledevice3
+        install_pymobiledevice3 || {
+            if [ "$INSTALLER_MODE" = "1" ]; then
+                print_warning "Failed to install pymobiledevice3, but continuing..."
+            else
+                print_error "Failed to install pymobiledevice3"
+                return 1
+            fi
+        }
     fi
     
     # Verify all installations
     echo ""
-    verify_installations
+    if [ "$INSTALLER_MODE" = "1" ]; then
+        verify_installations || true  # Don't fail in installer mode
+        echo ""
+        print_info "Setup complete. If dependencies are missing, you can run this script manually later."
+        exit 0
+    else
+        verify_installations
+    fi
 }
 
 # Run main function
