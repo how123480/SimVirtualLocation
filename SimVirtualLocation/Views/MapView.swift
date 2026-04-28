@@ -40,6 +40,8 @@ class MapViewHolder {
     }
 
     @objc private func handleClickGesture(_ sender: NSClickGestureRecognizer) {
+        // Clear focus from any active text field
+        NSApp.keyWindow?.makeFirstResponder(nil)
         clickAction(sender)
     }
 }

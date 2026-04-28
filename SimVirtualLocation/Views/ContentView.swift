@@ -13,13 +13,51 @@ struct ContentView: View {
     let mapView: MapView
     @ObservedObject var locationController: LocationController
     @State private var showSidePanel: Bool = true
+    @State private var isDebugMode: Bool = false
+    @State private var eventMonitor: Any?
 
     var body: some View {
         VStack {
             ZStack(alignment: .topLeading) {
                 // 地圖底層
                 ZStack(alignment: .bottomTrailing) {
-                    mapView.frame(minWidth: 400)
+                    ZStack(alignment: .bottomLeading) {
+                        mapView.frame(minWidth: 400)
+                        
+                        if isDebugMode {
+                            ScrollViewReader { proxy in
+                                ScrollView {
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        ForEach(locationController.logs.reversed()) { log in
+                                            Text("\(locationController.dateFormatter.string(from: log.date)): \(log.message)")
+                                                .font(.system(size: 12, design: .monospaced))
+                                                .foregroundColor(.white)
+                                                .id(log.id)
+                                        }
+                                    }
+                                    .padding(8)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                }
+                                .frame(width: 400)
+                                .frame(maxHeight: 250)
+                                .background(Color.black.opacity(0.5))
+                                .cornerRadius(8)
+                                .padding()
+                                .onChange(of: locationController.logs.count) { _ in
+                                    if let lastId = locationController.logs.first?.id {
+                                        withAnimation {
+                                            proxy.scrollTo(lastId, anchor: .bottom)
+                                        }
+                                    }
+                                }
+                                .onAppear {
+                                    if let lastId = locationController.logs.first?.id {
+                                        proxy.scrollTo(lastId, anchor: .bottom)
+                                    }
+                                }
+                            }
+                        }
+                    }
                     
                     // 地圖縮放按鈕
                     VStack {
@@ -207,6 +245,32 @@ struct ContentView: View {
             .modifier(Alert(isPresented: $locationController.showingAlert, text: locationController.alertText))
         }
         .frame(minHeight: 800)
+        .onAppear {
+            DispatchQueue.main.async {
+                NSApp.keyWindow?.makeFirstResponder(nil)
+            }
+            
+            eventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+                if event.charactersIgnoringModifiers == "d",
+                   !event.modifierFlags.contains(.command),
+                   !event.modifierFlags.contains(.control),
+                   !event.modifierFlags.contains(.option) {
+                    if let firstResponder = NSApp.keyWindow?.firstResponder,
+                       firstResponder.isKind(of: NSTextView.self) {
+                        return event
+                    }
+                    
+                    isDebugMode.toggle()
+                    return nil
+                }
+                return event
+            }
+        }
+        .onDisappear {
+            if let monitor = eventMonitor {
+                NSEvent.removeMonitor(monitor)
+            }
+        }
     }
 
     init(mapView: MapView, locationController: LocationController) {
