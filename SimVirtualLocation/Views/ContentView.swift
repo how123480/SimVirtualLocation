@@ -110,41 +110,75 @@ struct ContentView: View {
                         TextField("Search location...", text: $locationController.searchQuery)
                             .textFieldStyle(PlainTextFieldStyle())
                             .padding(8)
+                            .onSubmit {
+                                locationController.performFullSearch()
+                            }
                     }
                     .background(Color(NSColor.windowBackgroundColor).opacity(0.9))
                     .cornerRadius(8)
                     .padding()
 
-                    if !locationController.searchResults.isEmpty && !locationController.searchQuery.isEmpty {
+                    if (!locationController.searchResults.isEmpty || !locationController.fullSearchResults.isEmpty) && !locationController.searchQuery.isEmpty {
                         ScrollView {
                             LazyVStack(alignment: .leading, spacing: 0) {
-                                ForEach(locationController.searchResults, id: \.self) { completion in
-                                    Button(action: {
-                                        locationController.selectSearchCompletion(completion)
-                                    }) {
-                                        HStack(spacing: 12) {
-                                            Image(systemName: completion.subtitle.contains(",") ? "building.2.fill" : "mappin.and.ellipse")
-                                                .foregroundColor(.blue)
-                                                .frame(width: 20)
+                                if !locationController.fullSearchResults.isEmpty {
+                                    ForEach(locationController.fullSearchResults, id: \.self) { item in
+                                        Button(action: {
+                                            locationController.selectMapItem(item)
+                                        }) {
+                                            HStack(spacing: 12) {
+                                                Image(systemName: "mappin.and.ellipse")
+                                                    .foregroundColor(.red)
+                                                    .frame(width: 20)
 
-                                            VStack(alignment: .leading) {
-                                                Text(completion.title)
-                                                    .font(.headline)
-                                                    .foregroundColor(.primary)
-                                                if !completion.subtitle.isEmpty {
-                                                    Text(completion.subtitle)
-                                                        .font(.subheadline)
-                                                        .foregroundColor(.secondary)
+                                                VStack(alignment: .leading) {
+                                                    Text(item.name ?? item.placemark.title ?? "Unknown")
+                                                        .font(.headline)
+                                                        .foregroundColor(.primary)
+                                                    if let title = item.placemark.title, title != item.name {
+                                                        Text(title)
+                                                            .font(.subheadline)
+                                                            .foregroundColor(.secondary)
+                                                    }
                                                 }
                                             }
+                                            .padding(.vertical, 8)
+                                            .padding(.horizontal)
+                                            .frame(maxWidth: .infinity, alignment: .leading)
+                                            .contentShape(Rectangle())
                                         }
-                                        .padding(.vertical, 8)
-                                        .padding(.horizontal)
-                                        .frame(maxWidth: .infinity, alignment: .leading)
-                                        .contentShape(Rectangle())
+                                        .buttonStyle(PlainButtonStyle())
+                                        Divider()
                                     }
-                                    .buttonStyle(PlainButtonStyle())
-                                    Divider()
+                                } else {
+                                    ForEach(locationController.searchResults, id: \.self) { completion in
+                                        Button(action: {
+                                            locationController.selectSearchCompletion(completion)
+                                        }) {
+                                            HStack(spacing: 12) {
+                                                Image(systemName: completion.subtitle.contains(",") ? "building.2.fill" : "mappin.and.ellipse")
+                                                    .foregroundColor(.blue)
+                                                    .frame(width: 20)
+
+                                                VStack(alignment: .leading) {
+                                                    Text(completion.title)
+                                                        .font(.headline)
+                                                        .foregroundColor(.primary)
+                                                    if !completion.subtitle.isEmpty {
+                                                        Text(completion.subtitle)
+                                                            .font(.subheadline)
+                                                            .foregroundColor(.secondary)
+                                                    }
+                                                }
+                                            }
+                                            .padding(.vertical, 8)
+                                            .padding(.horizontal)
+                                            .frame(maxWidth: .infinity, alignment: .leading)
+                                            .contentShape(Rectangle())
+                                        }
+                                        .buttonStyle(PlainButtonStyle())
+                                        Divider()
+                                    }
                                 }
                             }
                         }

@@ -97,10 +97,12 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
 
     @Published var searchQuery: String = "" {
         didSet {
+            fullSearchResults = []
             completer.queryFragment = searchQuery
         }
     }
     @Published var searchResults: [MKLocalSearchCompletion] = []
+    @Published var fullSearchResults: [MKMapItem] = []
 
     let dateFormatter: DateFormatter = {
         let formatter = DateFormatter()
@@ -145,7 +147,11 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
         super.init()
 
         completer.delegate = self
-        completer.resultTypes = .address
+        if #available(macOS 15.0, *) {
+            completer.resultTypes = [.address, .pointOfInterest, .physicalFeature]
+        } else {
+            completer.resultTypes = [.address, .pointOfInterest]
+        }
 
         runner.log = { [unowned self] message in
             self.log(message)
@@ -448,12 +454,49 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
             DispatchQueue.main.async {
                 self.searchQuery = "" // Clear search
                 self.searchResults = []
+                self.fullSearchResults = []
                 self.putLocationOnMap(location: .init(name: completion.title, latitude: coordinate.latitude, longitude: coordinate.longitude))
                 
                 let region = MKCoordinateRegion(center: coordinate, latitudinalMeters: 1000, longitudinalMeters: 1000)
                 self.mapView.mkMapView.setRegion(region, animated: true)
             }
         }
+    }
+
+    func performFullSearch() {
+        guard !searchQuery.isEmpty else { return }
+        
+        let request = MKLocalSearch.Request()
+        request.naturalLanguageQuery = searchQuery
+        request.region = mapView.mkMapView.region
+        
+        let search = MKLocalSearch(request: request)
+        search.start { [weak self] response, error in
+            guard let self = self, let response = response else {
+                if let error = error {
+                    self?.showAlert("Search failed: \(error.localizedDescription)")
+                }
+                return
+            }
+            
+            DispatchQueue.main.async {
+                self.searchResults = []
+                self.fullSearchResults = response.mapItems
+            }
+        }
+    }
+
+    func selectMapItem(_ item: MKMapItem) {
+        let coordinate = item.placemark.coordinate
+        self.searchQuery = "" // Clear search
+        self.fullSearchResults = []
+        self.searchResults = []
+        
+        let name = item.name ?? item.placemark.title ?? "Unknown Location"
+        self.putLocationOnMap(location: .init(name: name, latitude: coordinate.latitude, longitude: coordinate.longitude))
+        
+        let region = MKCoordinateRegion(center: coordinate, latitudinalMeters: 1000, longitudinalMeters: 1000)
+        self.mapView.mkMapView.setRegion(region, animated: true)
     }
 
     // MARK: - MKLocalSearchCompleterDelegate
@@ -643,150 +686,100 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
             return
         }
 
-        guard let password = promptForPassword() else {
-            log("RSD tunnel start cancelled by user")
-            return
-        }
-
         let deviceId = selectedDevice
         if deviceId.isEmpty {
             showAlert("No device selected")
             return
         }
 
-        // Run tunnel start on background queue to avoid blocking UI
+        guard let pymobilePath = self.runner.getFullPathOf("pymobiledevice3") else {
+            showAlert("pymobiledevice3 not found. Please ensure it's installed.")
+            return
+        }
+
+        self.tunnelStatus = "Waiting for authorization..."
+        
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self = self else { return }
             
-            // Get full path to pymobiledevice3
-            guard let pymobilePath = self.runner.getFullPathOf("pymobiledevice3") else {
+            let logPath = "/tmp/sim_rsd_\(deviceId).log"
+            try? "".write(toFile: logPath, atomically: true, encoding: .utf8)
+            
+            // 優化後的指令：直接使用 administrator privileges，不需要在內部寫 sudo
+            // 使用 sh -c 來確保重導向 > 正常運作
+            let scriptSource = "do shell script \"sh -c '\(pymobilePath) remote start-tunnel --udid \(deviceId) --protocol tcp > \(logPath) 2>&1 &'\" with administrator privileges"
+            
+            let script = NSAppleScript(source: scriptSource)
+            var error: NSDictionary?
+            script?.executeAndReturnError(&error)
+            
+            if let err = error {
+                let msg = err[NSAppleScript.errorMessage] as? String ?? "Unknown error"
                 DispatchQueue.main.async {
-                    self.showAlert("pymobiledevice3 not found. Please install it using 'pip install pymobiledevice3' and ensure it's in your PATH.")
+                    self.log("Auth Error: \(msg)")
+                    self.tunnelStatus = ""
+                    if !msg.contains("User canceled") {
+                        self.showAlert("Authorization failed: \(msg)")
+                    }
                 }
                 return
             }
-            
-            // Setup pipes
-            let inputPipe = Pipe()
-            let outputPipe = Pipe()
-            let errorPipe = Pipe()
 
-            // Create sudo task with pymobiledevice3 command
-            let sudoTask = Process()
-            sudoTask.executableURL = URL(fileURLWithPath: "/usr/bin/sudo")
-            // For remote start-tunnel, --udid should be passed as a subcommand argument
-            sudoTask.arguments = ["-S", pymobilePath, "remote", "start-tunnel", "--udid", deviceId, "--protocol", "tcp"]
-            sudoTask.standardInput = inputPipe
-            sudoTask.standardOutput = outputPipe
-            sudoTask.standardError = errorPipe
-
-            self.log("Starting tunnel for \(deviceId): sudo \(pymobilePath) remote start-tunnel --udid \(deviceId) --protocol tcp")
-
-           DispatchQueue.main.async {
-                self.tunnelStatus = "Starting tunnel..."
+            DispatchQueue.main.async {
+                self.isDeviceActive = true
+                self.tunnelStatus = "Connecting..."
+                self.log("Tunnel started in background. Monitoring log...")
             }
 
-            // Setup output handler BEFORE starting process
-            outputPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
-                let data = handle.availableData
-                if data.count > 0, let output = String(data: data, encoding: .utf8) {
-                    DispatchQueue.main.async {
-                        self?.parseRSDOutput(output)
+            self.monitorRSDLog(at: logPath)
+        }
+    }
+
+    private func monitorRSDLog(at path: String) {
+        var attempts = 0
+        
+        DispatchQueue.main.async {
+            Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] timer in
+                attempts += 1
+                guard let self = self, self.isDeviceActive else {
+                    timer.invalidate()
+                    return
+                }
+
+                if let content = try? String(contentsOfFile: path, encoding: .utf8), !content.isEmpty {
+                    self.parseRSDOutput(content)
+                    if self.tunnelStatus == "Connected" {
+                        timer.invalidate()
+                        return
                     }
                 }
-            }
-
-            // Setup error handler BEFORE starting process
-            errorPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
-                let data = handle.availableData
-                if data.count > 0, let errorText = String(data: data, encoding: .utf8) {
-                    let trimmed = errorText.trimmingCharacters(in: .whitespacesAndNewlines)
-                    
-                    self?.log("Tunnel Error: \(trimmed)")
-                    
-                    DispatchQueue.main.async {
-                        // Only show alerts for actual errors, not password prompts
-                        if !trimmed.isEmpty {
-                            if trimmed.contains("incorrect password") || 
-                               (trimmed.contains("Sorry, try again") && !trimmed.contains("Password:")) {
-                                self?.showAlert("Incorrect sudo password")
-                                self?.isDeviceActive = false
-                                self?.tunnelStatus = ""
-                            } else if trimmed.contains("command not found") || 
-                                      trimmed.contains("pymobiledevice3: not found") {
-                                self?.showAlert("pymobiledevice3 not found in PATH. Please ensure it's installed.")
-                                self?.isDeviceActive = false
-                                self?.tunnelStatus = ""
-                            }
-                        }
+                
+                if attempts >= 30 { // 等待 45 秒
+                    timer.invalidate()
+                    if self.tunnelStatus != "Connected" {
+                        self.showAlert("Connection timeout. Please check device connection.")
+                        self.stopDeviceOnMain()
                     }
-                }
-            }
-
-            do {
-                // Start the process
-                try sudoTask.run()
-
-                // Write password to stdin immediately with proper flushing
-                if let passwordData = "\(password)\n".data(using: .utf8) {
-                    try inputPipe.fileHandleForWriting.write(contentsOf: passwordData)
-                    // Force synchronize to ensure data is written
-                    if #available(macOS 10.15.4, *) {
-                        try? inputPipe.fileHandleForWriting.synchronize()
-                    }
-                    
-                    // Close the input pipe after writing password
-                    try? inputPipe.fileHandleForWriting.close()
-                }
-
-                DispatchQueue.main.async {
-                    self.tunnelProcess = sudoTask
-                    self.isDeviceActive = true
-                    self.tunnelStatus = "Authenticating..."
-                }
-
-                // Monitor process termination
-                sudoTask.terminationHandler = { [weak self] process in
-                    DispatchQueue.main.async {
-                        self?.isDeviceActive = false
-                        self?.tunnelStatus = ""
-                        self?.tunnelProcess = nil
-                        
-                        let status = process.terminationStatus
-                        // 15 = SIGTERM from process.terminate(), expected during normal stop
-                        if status != 0 && status != 15 {
-                            self?.showAlert("Tunnel exited with error code: \(status)")
-                        }
-                    }
-                }
-
-            } catch {
-                DispatchQueue.main.async {
-                    self.showAlert("Failed to start tunnel: \(error.localizedDescription)")
-                    self.isDeviceActive = false
-                    self.tunnelStatus = ""
                 }
             }
         }
     }
 
+    private func stopDeviceOnMain() {
+        DispatchQueue.main.async {
+            self.isDeviceActive = false
+            self.tunnelStatus = ""
+            self.killRSDTunnel(for: self.selectedDevice)
+        }
+    }
+
     func stopRSDTunnel() async {
-        // 1. Stop any running simulation
         isSimulating = false
         await runner.stopCurrentTask()
 
-        // 2. Clear location simulation on the device (while tunnel is still alive)
-        guard let process = tunnelProcess, process.isRunning else {
-            DispatchQueue.main.async {
-                self.isDeviceActive = false
-                self.tunnelStatus = ""
-                self.tunnelProcess = nil
-            }
-            return
-        }
-
         log("Stopping RSD tunnel...")
 
+        // 1. 重置 iOS 定位
         await runner.resetIos(
             udid: selectedDevice,
             useRSD: useRSD,
@@ -795,31 +788,25 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
             showAlert: showAlert
         )
 
-        // 3. Clear map annotations and route
+        // 2. 清理 UI
         await MainActor.run {
             mapView.mkMapView.removeAnnotations(mapView.mkMapView.annotations)
             annotations = []
-
             if let route = route {
                 mapView.mkMapView.removeOverlay(route.polyline)
             }
+            
+            // 3. 殺掉背景進程
+            self.stopDeviceOnMain()
         }
+    }
 
-        // 4. Terminate the tunnel process
-        if let stdout = process.standardOutput as? Pipe {
-            stdout.fileHandleForReading.readabilityHandler = nil
-        }
-        if let stderr = process.standardError as? Pipe {
-            stderr.fileHandleForReading.readabilityHandler = nil
-        }
-
-        process.terminate()
-
-        await MainActor.run {
-            self.tunnelProcess = nil
-            self.isDeviceActive = false
-            self.tunnelStatus = ""
-        }
+    private func killRSDTunnel(for udid: String) {
+        // 使用 pkill 根據關鍵字殺掉特定裝置的隧道
+        let script = "do shell script \"pkill -f 'pymobiledevice3.*\(udid)'\" with administrator privileges"
+        let appleScript = NSAppleScript(source: script)
+        appleScript?.executeAndReturnError(nil)
+        log("Cleaned up tunnel process for \(udid)")
     }
 
     func savePointA() {
@@ -916,26 +903,6 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
     }
 
     // MARK: - Private
-
-    private func promptForPassword() -> String? {
-        let alert = NSAlert()
-        alert.messageText = "Enter Password"
-        alert.informativeText = "Sudo password is required to start the RSD tunnel."
-        alert.alertStyle = .informational
-        alert.addButton(withTitle: "OK")
-        alert.addButton(withTitle: "Cancel")
-
-        let passwordField = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 200, height: 24))
-        alert.accessoryView = passwordField
-
-        alert.window.initialFirstResponder = passwordField
-
-        let response = alert.runModal()
-        if response == .alertFirstButtonReturn {
-            return passwordField.stringValue
-        }
-        return nil
-    }
 
     private func parseRSDOutput(_ output: String) {        
         // Parse RSD Address (IPv6 address after "RSD Address:")
