@@ -27,7 +27,7 @@ struct LocationsView: View {
                         Text(location.name)
                         HStack {
                             Button("To map") {
-                                locationController.putLocationOnMap(location: location)
+                                locationController.applySavedLocation(location)
                             }
 
                             Button("Delete") {

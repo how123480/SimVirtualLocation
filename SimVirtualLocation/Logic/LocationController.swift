@@ -853,6 +853,20 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
         addLocation(coordinate: CLLocationCoordinate2D(latitude: location.latitude, longitude: location.longitude))
     }
 
+    func applySavedLocation(_ location: Location) {
+        let coordinate = CLLocationCoordinate2D(latitude: location.latitude, longitude: location.longitude)
+        
+        // Put pin on map
+        addLocation(coordinate: coordinate)
+        
+        // Jump map to location
+        let region = MKCoordinateRegion(center: coordinate, latitudinalMeters: 1000, longitudinalMeters: 1000)
+        self.mapView.mkMapView.setRegion(region, animated: true)
+        
+        // Set the location (Run)
+        run(location: coordinate)
+    }
+
     func showAlert(_ text: String) {
         DispatchQueue.main.async {
             self.alertText = text
