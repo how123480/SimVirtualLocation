@@ -226,7 +226,7 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
             showAlert("Current location is unavailable")
             return
         }
-        run(location: location)
+        addLocation(coordinate: location)
     }
 
     func setSelectedLocation() {
@@ -868,18 +868,14 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
 
     func applySavedLocation(_ location: Location) {
         let coordinate = CLLocationCoordinate2D(latitude: location.latitude, longitude: location.longitude)
-        
-        // Put pin on map
+
+        // Put pin on map (will trigger run() if pointsMode is single and device isReady)
         addLocation(coordinate: coordinate)
-        
+
         // Jump map to location
         let region = MKCoordinateRegion(center: coordinate, latitudinalMeters: 1000, longitudinalMeters: 1000)
         self.mapView.mkMapView.setRegion(region, animated: true)
-        
-        // Set the location (Run)
-        run(location: coordinate)
     }
-
     func showAlert(_ text: String) {
         DispatchQueue.main.async {
             self.alertText = text
@@ -1116,6 +1112,11 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
 
         annotations.append(annotation)
         self.mapView.mkMapView.addAnnotation(annotation)
+
+        // Automatically run if it's Single Point mode and device is ready
+        if pointsMode == .single && isDeviceReady {
+            run(location: coordinate)
+        }
     }
 
     private func run(location: CLLocationCoordinate2D) {
