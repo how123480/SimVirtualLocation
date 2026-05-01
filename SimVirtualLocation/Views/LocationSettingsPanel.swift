@@ -100,16 +100,16 @@ struct LocationSettingsPanel: View {
                     }
                 }
 
-                if locationController.pointsMode == .two {
-                    GroupBox {
-                        HStack(alignment: .center) {
-                            Slider(value: $locationController.speed, in: 5...200, step: 5) {
-                                Text("Speed")
-                            }
-                            Text("\(Int(locationController.speed.rounded(.up))) km/h")
+        if locationController.pointsMode == .two {
+                GroupBox {
+                    HStack(alignment: .center) {
+                        Slider(value: $locationController.speed, in: 5...200, step: 5) {
+                            Text("Speed")
                         }
+                        Text("\(Int(locationController.speed.rounded(.up))) km/h")
                     }
-                    
+                }
+                
                     GroupBox {
                         if locationController.useRSD {
                             Picker("Update interval", selection: $locationController.timeScale) {

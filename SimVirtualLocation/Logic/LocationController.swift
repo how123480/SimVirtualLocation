@@ -89,6 +89,13 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
     @Published var isDeviceActive: Bool = false
     @Published var tunnelStatus: String = ""
 
+    var isDeviceReady: Bool {
+        if deviceType == 0 && deviceMode == .device {
+            return isDeviceActive && tunnelStatus == "Connected"
+        }
+        return true
+    }
+
     @Published var timeScale: Double = 1.5 {
         didSet { runner.timeDelay = timeScale }
     }
@@ -137,6 +144,12 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
     
     private var timer: Timer?
     private var tunnelProcess: Process?
+    
+    // Joystick properties
+    private var joystickDebounceTimer: Timer?
+    private var joystickMovementTimer: Timer?
+    private var activeKeys: Set<UInt16> = []
+    private var eventMonitor: Any?
 
     @Published var savedLocations: [Location] = []
 
@@ -1281,6 +1294,114 @@ private extension LocationController {
         log("booted simulators: [\(bootedSimulators.map { "\($0.id) \($0.name)" }.joined(separator: ", "))]")
 
         return [Simulator.empty()] + bootedSimulators
+    }
+}
+
+extension LocationController {
+    // MARK: - Joystick
+
+    func handleKeyEvent(_ event: NSEvent) {
+        guard pointsMode == .single else { return }
+
+        let isKeyDown = event.type == .keyDown
+        let keyCode = event.keyCode        
+        // Up: 126, Down: 125, Left: 123, Right: 124
+        if [123, 124, 125, 126].contains(keyCode) {
+            if isKeyDown {
+                activeKeys.insert(keyCode)
+                startJoystickMovement()
+            } else {
+                activeKeys.remove(keyCode)
+                if activeKeys.isEmpty {
+                    scheduleJoystickDebounce()
+                }
+            }
+        }
+    }
+
+    private func startJoystickMovement() {
+        joystickDebounceTimer?.invalidate()
+        joystickDebounceTimer = nil
+
+        if joystickMovementTimer == nil {
+            // Setup start location from Point A or current location
+            let startCoord: CLLocationCoordinate2D
+            if let first = annotations.first as? MKPointAnnotation {
+                startCoord = first.coordinate
+            } else if let loc = locationManager.location?.coordinate {
+                startCoord = loc
+            } else {
+                return
+            }
+
+            // Hide Point A
+            mapView.mkMapView.removeAnnotations(annotations)
+            annotations = []
+
+            // Show Orange Dot
+            currentSimulationAnnotation.coordinate = startCoord
+            if !mapView.mkMapView.annotations.contains(where: { $0 === currentSimulationAnnotation }) {
+                mapView.mkMapView.addAnnotation(currentSimulationAnnotation)
+            }
+
+            // 60fps for smooth movement
+            joystickMovementTimer = Timer.scheduledTimer(withTimeInterval: 0.016, repeats: true) { [weak self] _ in
+                self?.updateJoystickPosition()
+            }
+        }
+    }
+
+    private func scheduleJoystickDebounce() {
+        joystickDebounceTimer?.invalidate()
+        joystickDebounceTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: false) { [weak self] _ in
+            self?.commitJoystickMovement()
+        }
+    }
+
+    private func commitJoystickMovement() {
+        joystickMovementTimer?.invalidate()
+        joystickMovementTimer = nil
+        
+        let finalCoord = currentSimulationAnnotation.coordinate
+        
+        // Hide Orange Dot
+        mapView.mkMapView.removeAnnotation(currentSimulationAnnotation)
+        
+        // Setup Point A at final coordinate
+        addLocation(coordinate: finalCoord)
+        
+        // Run location to device
+        if isDeviceReady {
+            run(location: finalCoord)
+            lastRunnerUpdateTime = Date()
+        }
+    }
+
+    private func updateJoystickPosition() {
+        // Move a fixed percentage of the screen span (simulating fixed pixels)
+        let pixelsPerFrame: Double = 0.005 
+        
+        var dx: Double = 0
+        var dy: Double = 0
+        
+        if activeKeys.contains(126) { dy += pixelsPerFrame } // Up
+        if activeKeys.contains(125) { dy -= pixelsPerFrame } // Down
+        if activeKeys.contains(123) { dx -= pixelsPerFrame } // Left
+        if activeKeys.contains(124) { dx += pixelsPerFrame } // Right
+        
+        if dx == 0 && dy == 0 { return }
+        
+        let span = mapView.mkMapView.region.span
+        let dLat = dy * span.latitudeDelta
+        let dLon = dx * span.longitudeDelta
+        
+        let coord = currentSimulationAnnotation.coordinate
+        let newCoord = CLLocationCoordinate2D(latitude: coord.latitude + dLat, longitude: coord.longitude + dLon)
+        
+        currentSimulationAnnotation.coordinate = newCoord
+        
+        // Update map center smoothly
+        mapView.mkMapView.setCenter(newCoord, animated: false)
     }
 
     enum SimulatorFetchError: Error, CustomStringConvertible {

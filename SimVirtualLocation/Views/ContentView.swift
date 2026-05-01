@@ -15,6 +15,7 @@ struct ContentView: View {
     @State private var showSidePanel: Bool = true
     @State private var isDebugMode: Bool = false
     @State private var eventMonitor: Any?
+    @FocusState private var isSearchFocused: Bool
 
     var body: some View {
         VStack {
@@ -108,6 +109,7 @@ struct ContentView: View {
                             .foregroundColor(.gray)
                             .padding(.leading, 12)
                         TextField("Search location...", text: $locationController.searchQuery)
+                            .focused($isSearchFocused)
                             .textFieldStyle(PlainTextFieldStyle())
                             .padding(8)
                             .onSubmit {
@@ -283,24 +285,51 @@ struct ContentView: View {
             DispatchQueue.main.async {
                 NSApp.keyWindow?.makeFirstResponder(nil)
             }
-            
-            eventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-                if event.charactersIgnoringModifiers == "d",
+
+            eventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .keyUp]) { event in
+                let isKeyDown = event.type == .keyDown
+                
+                // Handle Esc key (keyCode 53) to unfocus
+                if isKeyDown, event.keyCode == 53 {
+                    if isSearchFocused {
+                        isSearchFocused = false
+                        NSApp.keyWindow?.makeFirstResponder(nil)
+                        return nil
+                    }
+                }
+
+                // Toggle Debug Mode (d)
+                if isKeyDown,
+                   event.charactersIgnoringModifiers == "d",
                    !event.modifierFlags.contains(.command),
                    !event.modifierFlags.contains(.control),
                    !event.modifierFlags.contains(.option) {
+
+                    if isSearchFocused {
+                        return event
+                    }
+
                     if let firstResponder = NSApp.keyWindow?.firstResponder,
                        firstResponder.isKind(of: NSTextView.self) {
                         return event
                     }
-                    
+
                     isDebugMode.toggle()
                     return nil
                 }
+
+                // Joystick
+                if [123, 124, 125, 126].contains(event.keyCode) {
+                    if isSearchFocused {
+                        return event
+                    }
+                    locationController.handleKeyEvent(event)
+                    return event
+                }
+
                 return event
             }
-        }
-        .onDisappear {
+        }        .onDisappear {
             if let monitor = eventMonitor {
                 NSEvent.removeMonitor(monitor)
             }
