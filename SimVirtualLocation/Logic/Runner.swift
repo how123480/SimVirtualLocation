@@ -118,7 +118,11 @@ class Runner {
         do {
             try task.run()
 
-            task.waitUntilExit()
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                task.terminationHandler = { _ in
+                    continuation.resume()
+                }
+            }
             
             // Clear currentTask reference after task exits
             self.currentTask = nil
@@ -190,7 +194,11 @@ class Runner {
         do {
             try task.run()
 
-            task.waitUntilExit()
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                task.terminationHandler = { _ in
+                    continuation.resume()
+                }
+            }
             
             // Clear currentTask reference after task exits
             self.currentTask = nil
@@ -224,54 +232,56 @@ class Runner {
         adbPath: String,
         isEmulator: Bool,
         showAlert: @escaping (String) -> Void
-    ) {
-        executionQueue.async {
-            let task: Process
-            
-            if isEmulator {
-                task = self.taskForAndroid(
-                    args: [
-                        "-s", adbDeviceId,
-                        "emu", "geo", "fix",
-                        "\(location.longitude)",
-                        "\(location.latitude)"
-                    ],
-                    adbPath: adbPath
-                )
-            } else {
-                task = self.taskForAndroid(
-                    args: [
-                        "-s", adbDeviceId,
-                        "shell", "am", "broadcast",
-                        "-a", "send.mock",
-                        "-e", "lat", "\(location.latitude)",
-                        "-e", "lon", "\(location.longitude)"
-                    ],
-                    adbPath: adbPath
-                )
-            }
-            
-            self.log?("set Android location \(location.description)")
-            self.log?("task: \(task.logDescription)")
+    ) async {
+        let task: Process
+        
+        if isEmulator {
+            task = self.taskForAndroid(
+                args: [
+                    "-s", adbDeviceId,
+                    "emu", "geo", "fix",
+                    "\(location.longitude)",
+                    "\(location.latitude)"
+                ],
+                adbPath: adbPath
+            )
+        } else {
+            task = self.taskForAndroid(
+                args: [
+                    "-s", adbDeviceId,
+                    "shell", "am", "broadcast",
+                    "-a", "send.mock",
+                    "-e", "lat", "\(location.latitude)",
+                    "-e", "lon", "\(location.longitude)"
+                ],
+                adbPath: adbPath
+            )
+        }
+        
+        self.log?("set Android location \(location.description)")
+        self.log?("task: \(task.logDescription)")
 
-            let errorPipe = Pipe()
-            
-            task.standardError = errorPipe
-            
-            do {
-                try task.run()
-                task.waitUntilExit()
-            } catch {
-                showAlert(error.localizedDescription)
-                return
+        let errorPipe = Pipe()
+        
+        task.standardError = errorPipe
+        
+        do {
+            try task.run()
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                task.terminationHandler = { _ in
+                    continuation.resume()
+                }
             }
-            
-            let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
-            let error = String(decoding: errorData, as: UTF8.self)
-            
-            if !error.isEmpty {
-                showAlert(error)
-            }
+        } catch {
+            showAlert(error.localizedDescription)
+            return
+        }
+        
+        let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
+        let error = String(decoding: errorData, as: UTF8.self)
+        
+        if !error.isEmpty {
+            showAlert(error)
         }
     }
     
@@ -301,7 +311,11 @@ class Runner {
             task.standardError = pipe
             
             try task.run()
-            task.waitUntilExit()
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                task.terminationHandler = { _ in
+                    continuation.resume()
+                }
+            }
             
             let output = pipe.fileHandleForReading.readDataToEndOfFile()
             pipe.fileHandleForReading.closeFile()

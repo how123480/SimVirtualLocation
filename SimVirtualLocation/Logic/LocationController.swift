@@ -48,6 +48,7 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
     @Published var simulationType: SimulationType = .none
     @Published var isSimulating = false
     private var lastRunnerUpdateTime: Date = Date.distantPast
+    private var currentRunTask: Task<Void, Never>?
 
     @Published var speed: Double = 60.0
     @Published var pointsMode: PointsMode = .single {
@@ -1072,14 +1073,18 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
     }
 
     private func handlePointsModeChange() {
-        if pointsMode == .single && annotations.count == 2, let second = annotations.last {
-            mapView.mkMapView.removeAnnotation(second)
+        if pointsMode == .single {
+            stopSimulation(clearAnnotations: false)
 
-            if let route = route {
-                mapView.mkMapView.removeOverlay(route.polyline)
+            if annotations.count == 2, let second = annotations.last {
+                mapView.mkMapView.removeAnnotation(second)
+
+                if let route = route {
+                    mapView.mkMapView.removeOverlay(route.polyline)
+                }
+
+                annotations = [annotations[0]]
             }
-
-            annotations = [annotations[0]]
         }
     }
 
@@ -1125,12 +1130,15 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
         defaults.set(adbDeviceId, forKey: "adb_device_id")
         defaults.set(isEmulator, forKey: "is_emulator")
         
+        currentRunTask?.cancel()
+
         if deviceType != 0 {
             // Stop previous task asynchronously for Android
-            Task {
+            currentRunTask = Task {
                 await runner.stopCurrentTask()
+                if Task.isCancelled { return }
                 do {
-                    try runOnAndroid(location: location)
+                    try await runOnAndroid(location: location)
                 } catch {
                     showAlert("\(error)")
                 }
@@ -1140,11 +1148,11 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
         
         if deviceMode == .device {
             if useRSD {
-                Task {
+                currentRunTask = Task {
                     // Stop previous task before starting new one
                     await runner.stopCurrentTask()
-
-                    try await runner.runOnNewIos(
+                    if Task.isCancelled { return }
+                    try? await runner.runOnNewIos(
                         location: location,
                         udid: selectedDevice,
                         RSDAddress: RSDAddress,
@@ -1154,11 +1162,11 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
                 }
 
             } else {
-                Task {
+                currentRunTask = Task {
                     // Stop previous task before starting new one
                     await runner.stopCurrentTask()
-
-                    try await runner.runOnIos(
+                    if Task.isCancelled { return }
+                    try? await runner.runOnIos(
                         location: location,
                         udid: selectedDevice,
                         showAlert: showAlert
@@ -1170,8 +1178,9 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
                 showAlert(SimulatorFetchError.noBootedSimulators.description)
             }
             // For simulator, stop task in background
-            Task {
+            currentRunTask = Task {
                 await runner.stopCurrentTask()
+                if Task.isCancelled { return }
                 runner.runOnSimulator(
                     location: location,
                     selectedSimulator: selectedSimulator,
@@ -1182,7 +1191,7 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
         }
     }
     
-    private func runOnAndroid(location: CLLocationCoordinate2D) throws {
+    private func runOnAndroid(location: CLLocationCoordinate2D) async throws {
         if adbDeviceId.isEmpty {
             showAlert("Please specify device id")
             return
@@ -1200,7 +1209,7 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
         - adbPath: \(adbPath)
         - isEmulator: \(isEmulator)
         """)
-        runner.runOnAndroid(
+        await runner.runOnAndroid(
             location: location,
             adbDeviceId: adbDeviceId,
             adbPath: adbPath,
