@@ -6,6 +6,7 @@ Posibilities:
 - supports both iOS and Android
 - set location to current Mac's location
 - set location to point on map
+- **Joystick Navigation**: smoothly move around the map using keyboard arrow keys (with adjustable speed in Single Point mode)
 - make route between two points and simulate moving with desired speed
 
 You can dowload compiled and signed app [here](https://github.com/nexron171/SimVirtualLocation/releases).
@@ -57,6 +58,14 @@ For detailed Swift Package configuration, see [SWIFT_PACKAGE_SETUP.md](./SWIFT_P
 ---
 ### How to run
 If you see an alert with warning that app is corrupted and Apple can not check the developer: try to press and hold `ctrl`, then click on SimVirtualLocation.app and select "Open", release `ctrl`. Now alert should have the "Open" button. Don't forget to copy app from dmg image to any place on your Mac.
+
+### Keyboard Shortcuts & Joystick Navigation
+The application features several global keyboard shortcuts for a seamless experience:
+- **Joystick Navigation**: In **Single Point** mode, use the **Arrow Keys** (Up, Down, Left, Right) to smoothly move your location around the map like a joystick.
+  - **Speed Adjustments**: Use the `Speed` slider to increase or decrease the distance the joystick moves per frame.
+  - **Safe Execution**: The actual location on your physical device is only updated *after* you release the arrow keys (to prevent timeout crashes), and *only if* the device is successfully connected and started. If you haven't clicked `Start` yet, the joystick will only move the Point A marker on the map.
+- **Escape (`Esc`)**: Instantly unfocus the Search bar so you can quickly return to using the Joystick without accidentally typing into the search field.
+- **Debug Mode (`d`)**: Press the `d` key to quickly toggle the debug panel.
 
 ### For iOS devices
 **Option 1: Automated Setup (Recommended)**
