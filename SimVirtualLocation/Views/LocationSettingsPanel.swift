@@ -43,11 +43,11 @@ struct LocationSettingsPanel: View {
                             latitude = ""
                             longitude = ""
                             latitudeLongitude = ""
-                            isPresentedSetToCoordinate = true
+                            locationController.isShowingDialog = true
                         }, label: {
                             Text("Set to Coordinate").frame(maxWidth: .infinity)
                         })
-                        .alert("Enter your coordinate", isPresented: $isPresentedSetToCoordinate) {
+                        .alert("Enter your coordinate", isPresented: $locationController.isShowingDialog) {
                             TextField("Latitude, Longitude", text: $latitudeLongitude)
                             Button("Move"){
                                 if latitude.isEmpty || longitude.isEmpty {

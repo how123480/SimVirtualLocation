@@ -79,6 +79,7 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
     }
 
     @Published var showingAlert: Bool = false
+    @Published var isShowingDialog: Bool = false
     @Published var deviceType: Int = 0
     @Published var adbPath: String = ""
     @Published var adbDeviceId: String = ""
@@ -1324,7 +1325,13 @@ extension LocationController {
     // MARK: - Joystick
 
     func handleKeyEvent(_ event: NSEvent) {
-        guard pointsMode == .single else { return }
+        // Disable joystick if an alert or dialog is shown or if the user is typing in a text field
+        guard pointsMode == .single, !showingAlert, !isShowingDialog else { return }
+        
+        if let firstResponder = NSApp.keyWindow?.firstResponder,
+           firstResponder.isKind(of: NSTextView.self) {
+            return
+        }
 
         let isKeyDown = event.type == .keyDown
         let keyCode = event.keyCode        
