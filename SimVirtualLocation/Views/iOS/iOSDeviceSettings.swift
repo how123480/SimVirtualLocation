@@ -51,19 +51,18 @@ struct iOSDeviceSettings: View {
                 })
                 
                 Button(action: {
-                    if locationController.isDeviceActive {
-                        Task {
-                            await locationController.stopDevice()
-                        }
+                    if locationController.deviceStatus.isActive {
+                        Task { await locationController.stopDevice() }
                     } else {
                         locationController.startDevice()
                     }
                 }) {
                     HStack {
-                        Image(systemName: locationController.isDeviceActive ? "stop.circle.fill" : "play.circle.fill")
-                        Text(locationController.isDeviceActive ? "Stop" : "Start")
-                        if !locationController.tunnelStatus.isEmpty {
-                            Text("(\(locationController.tunnelStatus))")
+                        Image(systemName: locationController.deviceStatus.isActive ? "stop.circle.fill" : "play.circle.fill")
+                        Text(locationController.deviceStatus.isActive ? "Stop" : "Start")
+                        // Display corresponding status string (from DeviceStatus enum)
+                        if !locationController.deviceStatus.displayText.isEmpty {
+                            Text("(\(locationController.deviceStatus.displayText))")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
                         }
@@ -71,8 +70,8 @@ struct iOSDeviceSettings: View {
                     .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
-                .tint(locationController.isDeviceActive ? .red : .blue)
-                .id("device-active-\(locationController.isDeviceActive)")
+                .tint(locationController.deviceStatus.isActive ? .red : .blue)
+                .id("device-status-\(locationController.deviceStatus.displayText)")
             }
         }
     }

@@ -20,7 +20,7 @@ struct ContentView: View {
     var body: some View {
         VStack {
             ZStack(alignment: .topLeading) {
-                // 地圖底層
+                // Map background layer
                 ZStack(alignment: .bottomTrailing) {
                     ZStack(alignment: .bottomLeading) {
                         mapView.frame(minWidth: 400)
@@ -30,7 +30,8 @@ struct ContentView: View {
                                 ScrollView {
                                     VStack(alignment: .leading, spacing: 4) {
                                         ForEach(locationController.logs.reversed()) { log in
-                                            Text("\(locationController.dateFormatter.string(from: log.date)): \(log.message)")
+                                            // Unified format: [time] [level] [file:line] message
+                                            Text("[\(locationController.dateFormatter.string(from: log.date))] [\(log.level.label)] [\(log.location)] \(log.message)")
                                                 .font(.system(size: 12, design: .monospaced))
                                                 .foregroundColor(.white)
                                                 .id(log.id)
@@ -60,7 +61,7 @@ struct ContentView: View {
                         }
                     }
                     
-                    // 地圖縮放按鈕
+                    // Map zoom buttons
                     VStack {
                         Image(systemName: "plus")
                             .foregroundColor(Color.white)
@@ -102,7 +103,7 @@ struct ContentView: View {
                     .animation(.spring(), value: showSidePanel)
                 }
 
-                // 搜尋框 (左上)
+                // Search bar (top left)
                 VStack(alignment: .leading, spacing: 0) {
                     HStack {
                         Image(systemName: "magnifyingglass")
@@ -192,12 +193,12 @@ struct ContentView: View {
                 }
                 .frame(width: 300)
 
-                // 右側收合按鈕與面板
+                // Right sidebar toggle and panel
                 HStack(spacing: 0) {
                     Spacer()
-                        .allowsHitTesting(false) // 讓點擊穿透 Spacer 到地圖與按鈕
+                        .allowsHitTesting(false) // Allow clicks to pass through Spacer to map and buttons
                     
-                    // 收合按鈕 (拉桿) - 稍微加寬並美化
+                    // Toggle button (handle) - widened and beautified
                     ZStack {
                         RoundedRectangle(cornerRadius: 12)
                             .fill(.ultraThinMaterial)
@@ -214,13 +215,13 @@ struct ContentView: View {
                             showSidePanel.toggle()
                         }
                     }
-                    .padding(.trailing, showSidePanel ? -14 : 10) // 展開時讓拉桿與面板重疊，收合時靠右邊緣
+                    .padding(.trailing, showSidePanel ? -14 : 10) // Overlap handle with panel when expanded, align to right edge when collapsed
                     .zIndex(1)
 
                     if showSidePanel {
                         HStack(alignment: .top, spacing: 0) {
                             HStack(alignment: .top, spacing: 0) {
-                                // 設定面板 (Control Panel)
+                                // Control Panel
                                 VStack(spacing: 16) {
                                     if locationController.showAndroidOption {
                                         Picker("Device mode", selection: $locationController.deviceType) {
@@ -242,9 +243,8 @@ struct ContentView: View {
                                     Button(action: {
                                         let log = locationController.logs.map { entry in
                                             let date = locationController.dateFormatter.string(from: entry.date)
-                                            let message = entry.message
-                                            return "\(date): \(message)"
-                                        }.joined(separator: "\n\n")
+                                            return "[\(date)] [\(entry.level.label)] [\(entry.location)] \(entry.message)"
+                                        }.joined(separator: "\n")
                                         let pasteboard = NSPasteboard.general
                                         pasteboard.declareTypes([.string], owner: nil)
                                         pasteboard.setString(log, forType: .string)
@@ -262,7 +262,7 @@ struct ContentView: View {
                             }
                             .background(
                                 ZStack {
-                                    Color.gray.opacity(0.15) // 透明灰
+                                    Color.gray.opacity(0.15) // Transparent gray
                                     Rectangle().fill(.ultraThinMaterial)
                                 }
                             )
@@ -282,14 +282,14 @@ struct ContentView: View {
         }
         .frame(minHeight: 800)
         .onAppear {
-            DispatchQueue.main.async {
+            Task { @MainActor in
                 NSApp.keyWindow?.makeFirstResponder(nil)
             }
 
             eventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .keyUp]) { event in
                 let isKeyDown = event.type == .keyDown
-                
-                // Handle Esc key (keyCode 53) to unfocus
+
+                // Esc (53): Cancel text field focus
                 if isKeyDown, event.keyCode == 53 {
                     if isSearchFocused {
                         isSearchFocused = false
@@ -305,28 +305,20 @@ struct ContentView: View {
                    !event.modifierFlags.contains(.control),
                    !event.modifierFlags.contains(.option) {
 
-                    if isSearchFocused {
+                    if isSearchFocused { return event }
+                    if let fr = NSApp.keyWindow?.firstResponder, fr.isKind(of: NSTextView.self) {
                         return event
                     }
-
-                    if let firstResponder = NSApp.keyWindow?.firstResponder,
-                       firstResponder.isKind(of: NSTextView.self) {
-                        return event
-                    }
-
                     isDebugMode.toggle()
                     return nil
                 }
 
-                // Joystick
+                // Arrow keys: Joystick
                 if [123, 124, 125, 126].contains(event.keyCode) {
-                    if isSearchFocused {
-                        return event
-                    }
+                    if isSearchFocused { return event }
                     locationController.handleKeyEvent(event)
                     return event
                 }
-
                 return event
             }
         }        .onDisappear {
@@ -342,7 +334,7 @@ struct ContentView: View {
     }
 }
 
-// 輔助擴展，用於自定義圓角
+// Helper extension for custom corner radius
 extension View {
     func cornerRadius(_ radius: CGFloat, corners: RectCorner) -> some View {
         clipShape(RoundedCorner(radius: radius, corners: corners))

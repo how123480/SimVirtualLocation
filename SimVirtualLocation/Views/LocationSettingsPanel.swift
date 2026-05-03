@@ -16,11 +16,11 @@ struct LocationSettingsPanel: View {
     @State private var longitude = ""
     @State private var latitudeLongitude = ""
     
-    // Disable location controls when in iOS device mode but device not connected
+    // Disable location controls if device is not connected/ready in iOS physical mode
     private var shouldDisableLocationControls: Bool {
         return locationController.deviceType == 0 && // iOS
-               locationController.deviceMode == .device && // Device mode
-               (!locationController.isDeviceActive || locationController.tunnelStatus != "Connected")
+               locationController.deviceMode == .device && // Physical Device
+               !locationController.deviceStatus.isReady
     }
     
     var body: some View {
@@ -36,7 +36,7 @@ struct LocationSettingsPanel: View {
                         Button(action: {
                             locationController.setCurrentLocation()
                         }, label: {
-                            Text("Set to current location").frame(maxWidth: .infinity)
+                            Text("Set to Current").frame(maxWidth: .infinity)
                         })
                         
                         Button(action: {
@@ -45,9 +45,9 @@ struct LocationSettingsPanel: View {
                             latitudeLongitude = ""
                             locationController.isShowingDialog = true
                         }, label: {
-                            Text("Set to Coordinate").frame(maxWidth: .infinity)
+                            Text("Enter Coordinates").frame(maxWidth: .infinity)
                         })
-                        .alert("Enter your coordinate", isPresented: $locationController.isShowingDialog) {
+                        .alert("Enter Coordinates", isPresented: $locationController.isShowingDialog) {
                             TextField("Latitude, Longitude", text: $latitudeLongitude)
                             Button("Move"){
                                 if latitude.isEmpty || longitude.isEmpty {
@@ -65,38 +65,41 @@ struct LocationSettingsPanel: View {
                             Button(action: {
                                 locationController.setSelectedLocation()
                             }, label: {
-                                Text("Set to A").frame(maxWidth: .infinity)
+                                Text("Apply to A").frame(maxWidth: .infinity)
                             })
                             Button(action: {
                                 locationController.savePointA()
                             }, label: {
-                                Text("Save point A").frame(maxWidth: .infinity)
+                                Text("Save Point A").frame(maxWidth: .infinity)
                             })
                         }
                     }
                     
                     if locationController.pointsMode == .two {
+                        // Route simulation button (displays corresponding string based on SimulationStatus)
                         Button(action: {
-                            if locationController.simulationType == .route {
+                            if locationController.simulationStatus == .route {
                                 locationController.stopSimulation()
                             } else {
                                 locationController.makeRoute(autoSimulate: true)
                             }
                         }, label: {
-                            Text(locationController.simulationType == .route ? "Stop simulation" : "Simulate route").frame(maxWidth: .infinity)
+                            Text(locationController.simulationStatus == .route ? "Stop Simulation" : "Simulate Route")
+                                .frame(maxWidth: .infinity)
                         })
-                        .disabled(locationController.simulationType == .fromAToB)
+                        .disabled(locationController.simulationStatus == .fromAToB)
 
                         Button(action: {
-                            if locationController.simulationType == .fromAToB {
+                            if locationController.simulationStatus == .fromAToB {
                                 locationController.stopSimulation()
                             } else {
                                 locationController.simulateFromAToB()
                             }
                         }, label: {
-                            Text(locationController.simulationType == .fromAToB ? "Stop simulation" : "Simulate from A to B").frame(maxWidth: .infinity)
+                            Text(locationController.simulationStatus == .fromAToB ? "Stop A→B Simulation" : "A→B Linear Simulation")
+                                .frame(maxWidth: .infinity)
                         })
-                        .disabled(locationController.simulationType == .route)
+                        .disabled(locationController.simulationStatus == .route)
                     }
                 }
 
