@@ -4,245 +4,146 @@
 //
 //  Created by Sergey Shirnin on 19.05.2022.
 //
+//  External command (pymobiledevice3 / adb / xcrun simctl) executor.
+//  - Unified Process wrapping with async / await, no longer mixing DispatchQueue callbacks
+//  - All error outputs are consolidated through AppLogger
+//
 
 import Foundation
 import CoreLocation
 
 class Runner {
 
-    // MARK: - Internal Properties
+    // MARK: - Public Properties
 
+    /// Minimum interval (seconds) between location updates during route simulation
     var timeDelay: TimeInterval = 0.5
-    var log: ((String) -> Void)?
 
     // MARK: - Private Properties
 
-    private let runnerQueue = DispatchQueue(label: "runnerQueue", qos: .background)
-    private let executionQueue = DispatchQueue(label: "executionQueue", qos: .background, attributes: .concurrent)
-    private var idevicelocationPath: URL?
-
+    /// Currently running location Process (used to terminate old commands before switching to new ones)
     private var currentTask: Process?
 
-    // MARK: - Internal Methods
+    private let log = AppLogger.shared
 
-    /// Filters out known benign warnings from error messages
+    // MARK: - Utility Tools
+
+    /// Filter known harmless warnings (urllib3 / LibreSSL)
     private func shouldSuppressError(_ error: String) -> Bool {
-
-        // Suppress urllib3 OpenSSL/LibreSSL warnings (common on macOS)
-        if error.contains("NotOpenSSLWarning") || 
+        if error.contains("NotOpenSSLWarning") ||
            error.contains("urllib3 v2 only supports OpenSSL") ||
            error.contains("LibreSSL") {
             return true
         }
-        
-        // Suppress empty or whitespace-only errors
         if error.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return true
         }
-        
         return false
     }
 
+    /// Wait for Process to end (replaces blocking task.waitUntilExit())
+    private func waitExit(_ task: Process) async {
+        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+            task.terminationHandler = { _ in cont.resume() }
+        }
+    }
+
+    // MARK: - Developer Mode
+
     enum DeveloperModeStatus {
-        case enabled        
-        case needsManual    
-        case failed(String) 
+        case enabled
+        case needsManual
+        case failed(String)
     }
 
     func checkDeveloperModeStatus(udid: String) async -> Bool {
         do {
-            let task = try await self.taskForIOS(
-                args: ["amfi", "developer-mode-status", "--udid", udid],
-                showAlert: { _ in }
-            )
-            
+            let task = try await taskForIOS(args: ["amfi", "developer-mode-status", "--udid", udid])
             let outputPipe = Pipe()
             task.standardOutput = outputPipe
-            
+
             try task.run()
-            
-            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-                task.terminationHandler = { _ in
-                    continuation.resume()
-                }
-            }
-            
+            await waitExit(task)
+
             let data = outputPipe.fileHandleForReading.readDataToEndOfFile()
-            let output = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-            
-            self.log?("Developer Mode status for \(udid): \(output)")
-            
-            // Returns true if output contains "true", otherwise false
+            let output = String(decoding: data, as: UTF8.self)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .lowercased()
+
+            log.info("Developer Mode status: \(output)")
             return output.contains("true")
         } catch {
-            self.log?("Failed to check developer-mode-status: \(error.localizedDescription)")
+            log.error("Failed to check Developer Mode: \(error.localizedDescription)")
             return false
-        }
-    }
-
-    func enableDeveloperMode(udid: String) async -> DeveloperModeStatus {
-        do {
-            let task = try await self.taskForIOS(
-                args: ["amfi", "enable-developer-mode", "--udid", udid],
-                showAlert: { _ in }
-            )
-            
-            self.log?("Checking Developer Mode for device \(udid)...")
-            
-            let errorPipe = Pipe()
-            task.standardError = errorPipe
-            
-            try task.run()
-            
-            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-                task.terminationHandler = { _ in
-                    continuation.resume()
-                }
-            }
-            
-            if let errorData = try? errorPipe.fileHandleForReading.readToEnd() {
-                let error = String(decoding: errorData, as: UTF8.self)
-                if error.contains("passcode is set") {
-                    return .needsManual
-                } else if error.contains("DeveloperModeDisabled") {
-                    return .needsManual
-                } else if !error.isEmpty && !self.shouldSuppressError(error) {
-                    self.log?("Developer Mode Trigger output: \(error.trimmingCharacters(in: .whitespacesAndNewlines))")
-                }
-            }
-            
-            return task.terminationStatus == 0 ? .enabled : .failed("Exit code \(task.terminationStatus)")
-        } catch {
-            return .failed(error.localizedDescription)
         }
     }
 
     func revealDeveloperMode(udid: String) async {
         do {
-            let task = try await self.taskForIOS(
-                args: ["amfi", "reveal-developer-mode", "--udid", udid],
-                showAlert: { _ in }
-            )
-            
-            self.log?("Revealing Developer Mode menu for device \(udid)...")
+            let task = try await taskForIOS(args: ["amfi", "reveal-developer-mode", "--udid", udid])
+            log.info("Prompting device to open Developer Mode menu")
             try task.run()
-            
-            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-                task.terminationHandler = { _ in
-                    continuation.resume()
-                }
-            }
+            await waitExit(task)
         } catch {
-            self.log?("Failed to reveal-developer-mode: \(error.localizedDescription)")
+            log.error("reveal-developer-mode failed: \(error.localizedDescription)")
         }
     }
 
+    // MARK: - Terminate Current Command
+
     func stopCurrentTask() async {
-        guard let task = currentTask, task.isRunning else {
-            return
-        }
-        
-        log?("Stopping current location task to start new one")
+        guard let task = currentTask, task.isRunning else { return }
+
+        log.debug("Terminating previous location command")
         task.terminate()
-        
-        // Wait asynchronously for the task to exit (up to 2 seconds)
-        let startTime = Date()
-        let timeout: TimeInterval = 2.0
-        
-        while task.isRunning && Date().timeIntervalSince(startTime) < timeout {
-            try? await Task.sleep(nanoseconds: 50_000_000) // Sleep 50ms
+
+        // Wait for process to end (max 2 seconds)
+        let start = Date()
+        while task.isRunning && Date().timeIntervalSince(start) < 2.0 {
+            try? await Task.sleep(nanoseconds: 50_000_000)
         }
-        
+
         if task.isRunning {
-            log?("Warning: Task did not exit within timeout, forcing cleanup")
+            log.warn("Old command did not end within time limit, forcing clear")
         } else {
-            log?("Previous task stopped successfully")
+            log.debug("Old command has ended")
         }
-        
         currentTask = nil
     }
-    
+
+    // MARK: - Simulator Location
+
     func runOnSimulator(
         location: CLLocationCoordinate2D,
         selectedSimulator: String,
-        bootedSimulators: [Simulator],
-        showAlert: @escaping (String) -> Void
+        bootedSimulators: [Simulator]
     ) {
         let simulators = bootedSimulators
             .filter { $0.id == selectedSimulator || selectedSimulator == "" }
             .map { $0.id }
 
-        log?("set simulator location \(location.description)")
-
+        log.info("Simulator location: lat=\(location.latitude), lng=\(location.longitude)")
         NotificationSender.postNotification(for: location, to: simulators)
     }
-    
+
+    // MARK: - iOS 16 and Below Location
+
     func runOnIos(
         location: CLLocationCoordinate2D,
         udid: String,
         showAlert: @escaping (String) -> Void
     ) async throws {
-        let task = try await self.taskForIOS(
-            args: [
-                "developer",
-                "simulate-location",
-                "set",
-                "--udid",
-                udid,
-                "--",
-                "\(String(format: "%.5f", location.latitude))",
-                "\(String(format: "%.5f", location.longitude))"
-            ],
-            showAlert: showAlert
-        )
-
-        self.log?("set iOS location \(location.description) for device \(udid)")
-        self.log?("task: \(task.logDescription)")
-
-        self.currentTask = task
-
-        let inputPipe = Pipe()
-        let outputPipe = Pipe()
-        let errorPipe = Pipe()
-
-        task.standardInput = inputPipe
-        task.standardOutput = outputPipe
-        task.standardError = errorPipe
-
-        do {
-            try task.run()
-
-            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-                task.terminationHandler = { _ in
-                    continuation.resume()
-                }
-            }
-            
-            // Clear currentTask reference after task exits
-            self.currentTask = nil
-
-            // Only show errors if task wasn't terminated (exit code 15 = SIGTERM)
-            // When terminated by stopCurrentTask(), SSL errors are expected and should be ignored
-            if task.terminationStatus != 0 && task.terminationStatus != 15 {
-                if let errorData = try errorPipe.fileHandleForReading.readToEnd() {
-                    let error = String(decoding: errorData, as: UTF8.self)
-
-                    // Filter out known benign warnings (urllib3, LibreSSL, etc.)
-                    if !error.isEmpty && !self.shouldSuppressError(error) {
-                        showAlert(error)
-                    } else if !error.isEmpty {
-                        self.log?("Suppressed benign warning: \(error.prefix(100))...")
-                    }
-                }
-            } else if task.terminationStatus == 15 {
-                self.log?("Task terminated (exit code 15), errors suppressed")
-            }
-        } catch {
-            self.currentTask = nil
-            showAlert(error.localizedDescription)
-            return
-        }
+        let task = try await taskForIOS(args: [
+            "developer", "simulate-location", "set",
+            "--udid", udid,
+            "--",
+            String(format: "%.5f", location.latitude),
+            String(format: "%.5f", location.longitude),
+        ])
+        try await runLocationTask(task, label: "iOS legacy", showAlert: showAlert)
     }
+
+    // MARK: - iOS 17+ RSD Location
 
     func runOnNewIos(
         location: CLLocationCoordinate2D,
@@ -252,74 +153,65 @@ class Runner {
         showAlert: @escaping (String) -> Void
     ) async throws {
         guard !RSDAddress.isEmpty, !RSDPort.isEmpty else {
-            showAlert("Please specify RSD ID and Port")
+            showAlert("RSD Address / Port not yet obtained")
             return
         }
 
-        let task = try await self.taskForIOS(
-            args: [
-                "developer",
-                "dvt",
-                "simulate-location",
-                "set",
-                "--rsd",
-                RSDAddress,
-                RSDPort,
-                "--",
-                "\(location.latitude)",
-                "\(location.longitude)"
-            ],
-            showAlert: showAlert
-        )
+        let task = try await taskForIOS(args: [
+            "developer", "dvt", "simulate-location", "set",
+            "--rsd", RSDAddress, RSDPort,
+            "--",
+            "\(location.latitude)",
+            "\(location.longitude)",
+        ])
+        try await runLocationTask(task, label: "iOS RSD", showAlert: showAlert)
+    }
 
-        self.log?("set iOS location \(location.description) for device \(udid)")
-        self.log?("task: \(task.logDescription)")
+    /// Shared location command execution flow
+    private func runLocationTask(
+        _ task: Process,
+        label: String,
+        showAlert: @escaping (String) -> Void
+    ) async throws {
+        log.debug("Executing \(label) location command: \(task.logDescription)")
 
-        self.currentTask = task
+        currentTask = task
 
-        let inputPipe = Pipe()
-        let outputPipe = Pipe()
-        let errorPipe = Pipe()
-
-        task.standardInput = inputPipe
-        task.standardOutput = outputPipe
-        task.standardError = errorPipe
+        let outPipe = Pipe()
+        let errPipe = Pipe()
+        task.standardInput = Pipe()
+        task.standardOutput = outPipe
+        task.standardError = errPipe
 
         do {
             try task.run()
+            await waitExit(task)
+            currentTask = nil
 
-            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-                task.terminationHandler = { _ in
-                    continuation.resume()
-                }
-            }
-            
-            // Clear currentTask reference after task exits
-            self.currentTask = nil
-
-            // Only show errors if task wasn't terminated (exit code 15 = SIGTERM)
-            // When terminated by stopCurrentTask(), SSL errors are expected and should be ignored
+            // Termination signal (15 = SIGTERM) is expected, do not report as error
             if task.terminationStatus != 0 && task.terminationStatus != 15 {
-                if let errorData = try errorPipe.fileHandleForReading.readToEnd() {
-                    let error = String(decoding: errorData, as: UTF8.self)
-
-                    // Filter out known benign warnings (urllib3, LibreSSL, etc.)
-                    if !error.isEmpty && !self.shouldSuppressError(error) {
-                        showAlert(error)
-                    } else if !error.isEmpty {
-                        self.log?("Suppressed benign warning: \(error.prefix(100))...")
+                if let data = try errPipe.fileHandleForReading.readToEnd() {
+                    let err = String(decoding: data, as: UTF8.self)
+                    if !err.isEmpty && !shouldSuppressError(err) {
+                        showAlert(err)
+                        log.error("\(label) failed: \(err)")
+                    } else if !err.isEmpty {
+                        log.debug("Suppressing harmless warning: \(err.prefix(120))")
                     }
                 }
             } else if task.terminationStatus == 15 {
-                self.log?("Task terminated (exit code 15), errors suppressed")
+                log.debug("Location command terminated (SIGTERM), skipping error output")
             }
         } catch {
-            self.currentTask = nil
+            currentTask = nil
             showAlert(error.localizedDescription)
-            return
+            log.error("\(label) start failed: \(error.localizedDescription)")
+            throw error
         }
     }
-    
+
+    // MARK: - Android Location
+
     func runOnAndroid(
         location: CLLocationCoordinate2D,
         adbDeviceId: String,
@@ -328,57 +220,48 @@ class Runner {
         showAlert: @escaping (String) -> Void
     ) async {
         let task: Process
-        
         if isEmulator {
-            task = self.taskForAndroid(
-                args: [
-                    "-s", adbDeviceId,
-                    "emu", "geo", "fix",
-                    "\(location.longitude)",
-                    "\(location.latitude)"
-                ],
-                adbPath: adbPath
-            )
+            task = taskForAndroid(args: [
+                "-s", adbDeviceId,
+                "emu", "geo", "fix",
+                "\(location.longitude)",
+                "\(location.latitude)",
+            ], adbPath: adbPath)
         } else {
-            task = self.taskForAndroid(
-                args: [
-                    "-s", adbDeviceId,
-                    "shell", "am", "broadcast",
-                    "-a", "send.mock",
-                    "-e", "lat", "\(location.latitude)",
-                    "-e", "lon", "\(location.longitude)"
-                ],
-                adbPath: adbPath
-            )
+            task = taskForAndroid(args: [
+                "-s", adbDeviceId,
+                "shell", "am", "broadcast",
+                "-a", "send.mock",
+                "-e", "lat", "\(location.latitude)",
+                "-e", "lon", "\(location.longitude)",
+            ], adbPath: adbPath)
         }
-        
-        self.log?("set Android location \(location.description)")
-        self.log?("task: \(task.logDescription)")
 
-        let errorPipe = Pipe()
-        
-        task.standardError = errorPipe
-        
+        log.info("Android location: lat=\(location.latitude), lng=\(location.longitude)")
+        log.debug("Android command: \(task.logDescription)")
+
+        let errPipe = Pipe()
+        task.standardError = errPipe
+
         do {
             try task.run()
-            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-                task.terminationHandler = { _ in
-                    continuation.resume()
-                }
-            }
+            await waitExit(task)
         } catch {
             showAlert(error.localizedDescription)
+            log.error("Android command failed: \(error.localizedDescription)")
             return
         }
-        
-        let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
-        let error = String(decoding: errorData, as: UTF8.self)
-        
-        if !error.isEmpty {
-            showAlert(error)
+
+        let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
+        let err = String(decoding: errData, as: UTF8.self)
+        if !err.isEmpty {
+            showAlert(err)
+            log.error("Android stderr: \(err)")
         }
     }
-    
+
+    // MARK: - Reset / Stop Location
+
     func resetIos(
         udid: String,
         useRSD: Bool,
@@ -387,167 +270,139 @@ class Runner {
         showAlert: @escaping (String) -> Void
     ) async {
         await stopCurrentTask()
-        
-        // Clear location simulation on iOS device
+
         do {
-            var args: [String] = []
-            
+            let args: [String]
             if useRSD && !RSDAddress.isEmpty && !RSDPort.isEmpty {
                 args = ["developer", "dvt", "simulate-location", "clear", "--rsd", RSDAddress, RSDPort]
             } else {
                 args = ["developer", "simulate-location", "clear", "--udid", udid]
             }
-            
-            let task = try await taskForIOS(args: args, showAlert: showAlert)
-            
+
+            let task = try await taskForIOS(args: args)
             let pipe = Pipe()
             task.standardOutput = pipe
             task.standardError = pipe
-            
+
             try task.run()
-            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-                task.terminationHandler = { _ in
-                    continuation.resume()
-                }
-            }
-            
+            await waitExit(task)
+
             let output = pipe.fileHandleForReading.readDataToEndOfFile()
-            pipe.fileHandleForReading.closeFile()
-            
             if task.terminationStatus == 0 {
-                log?("Successfully cleared iOS location simulation")
+                log.info("iOS mock location cleared")
             } else {
-                let errorMessage = String(decoding: output, as: UTF8.self)
-                log?("Failed to clear iOS location simulation: \(errorMessage)")
+                let msg = String(decoding: output, as: UTF8.self)
+                log.warn("Failed to clear iOS mock location: \(msg)")
             }
         } catch {
-            log?("Error clearing iOS location simulation: \(error.localizedDescription)")
+            log.error("Error clearing iOS mock location: \(error.localizedDescription)")
         }
     }
-    
+
     func resetAndroid(adbDeviceId: String, adbPath: String, showAlert: (String) -> Void) {
-        let task = taskForAndroid(
-            args: [
-                "-s", adbDeviceId,
-                "shell", "am", "broadcast",
-                "-a", "stop.mock"
-            ],
-            adbPath: adbPath
-        )
-        
-        let errorPipe = Pipe()
-        
-        task.standardError = errorPipe
-        
+        let task = taskForAndroid(args: [
+            "-s", adbDeviceId,
+            "shell", "am", "broadcast",
+            "-a", "stop.mock",
+        ], adbPath: adbPath)
+
+        let errPipe = Pipe()
+        task.standardError = errPipe
+
         do {
             try task.run()
         } catch {
             showAlert(error.localizedDescription)
         }
-        
-        let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
-        let error = String(decoding: errorData, as: UTF8.self)
-        
-        if !error.isEmpty {
-            showAlert(error)
+
+        let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
+        let err = String(decoding: errData, as: UTF8.self)
+        if !err.isEmpty {
+            showAlert(err)
         }
-        
         task.waitUntilExit()
     }
 
+    // MARK: - Path Search
+
     func getFullPathOf(_ command: String) -> String? {
-        // Common installation paths for command-line tools
-        let commonPaths = [
+        // Prioritize common installation locations
+        let common = [
             "/Users/\(NSUserName())/.local/bin/\(command)",
             "/opt/homebrew/bin/\(command)",
             "/usr/local/bin/\(command)",
             "/usr/bin/\(command)",
         ]
-        
-        // Check common paths first
-        for path in commonPaths {
-            if FileManager.default.fileExists(atPath: path) && FileManager.default.isExecutableFile(atPath: path) {
-                return path
-            }
+        for p in common where FileManager.default.isExecutableFile(atPath: p) {
+            return p
         }
-        
-        // Fallback: try using 'which' command with expanded PATH
+
+        // Backup: use which with expanded PATH environment variable
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/usr/bin/which")
         task.arguments = [command]
-        
-        // Set a comprehensive PATH that includes common locations
-        var environment = ProcessInfo.processInfo.environment
-        let expandedPath = [
+
+        var env = ProcessInfo.processInfo.environment
+        env["PATH"] = [
             "/Users/\(NSUserName())/.local/bin",
-            "/opt/homebrew/bin",
-            "/opt/homebrew/sbin",
-            "/usr/local/bin",
-            "/usr/bin",
-            "/bin",
-            "/usr/sbin",
-            "/sbin"
+            "/opt/homebrew/bin", "/opt/homebrew/sbin",
+            "/usr/local/bin", "/usr/bin", "/bin",
+            "/usr/sbin", "/sbin",
         ].joined(separator: ":")
-        environment["PATH"] = expandedPath
-        task.environment = environment
-        
+        task.environment = env
+
         let pipe = Pipe()
         task.standardOutput = pipe
-        
+
         do {
             try task.run()
             task.waitUntilExit()
             let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            let path = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let path = String(data: data, encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
             return (path?.isEmpty ?? true) ? nil : path
         } catch {
             return nil
         }
     }
 
-    func taskForIOS(args: [String], showAlert: (String) -> Void) async throws -> Process {
-        let pymobiledeivcePath = getFullPathOf("pymobiledevice3")
-        if pymobiledeivcePath == nil {
-            showAlert("pymobiledevice3 not found. Please install it using 'pip install pymobiledevice3' and ensure it's in your PATH.")
-            throw NSError(domain: "Runner", code: 1, userInfo: [NSLocalizedDescriptionKey: "pymobiledevice3 not found"])
-        }
-        let path: URL = URL(fileURLWithPath: pymobiledeivcePath!)
-        let task = Process()
-        task.executableURL = path
-        task.arguments = args
+    // MARK: - Create Process
 
+    /// Create pymobiledevice3 Process for iOS. Throws error if tool does not exist.
+    func taskForIOS(args: [String]) async throws -> Process {
+        guard let pymobile = getFullPathOf("pymobiledevice3") else {
+            throw NSError(domain: "Runner", code: 1, userInfo: [
+                NSLocalizedDescriptionKey: "Could not find pymobiledevice3, please install it and retry (pip install pymobiledevice3)"
+            ])
+        }
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: pymobile)
+        task.arguments = args
         return task
     }
 
-    // MARK: - Private Methods
-
     private func taskForAndroid(args: [String], adbPath: String) -> Process {
-        let path = adbPath
         let task = Process()
-        task.executableURL = URL(string: "file://\(path)")!
+        task.executableURL = URL(fileURLWithPath: adbPath)
         task.arguments = args
-        
         return task
     }
 }
 
 extension CLLocationCoordinate2D {
-
     var description: String { "\(latitude) \(longitude)" }
 }
 
 extension Process {
-
     var logDescription: String {
-        var description: String = ""
-        if let executableURL {
-            description += "\(executableURL.absoluteString) "
+        var s = ""
+        if let url = executableURL {
+            // Anonymization (home directory, UDID, etc.)
+            s += "\(Sanitizer.sanitize(url.path)) "
         }
-
-        if let arguments {
-            description += "\(arguments.joined(separator: " "))"
+        if let args = arguments {
+            s += Sanitizer.sanitize(args.joined(separator: " "))
         }
-
-        return description
+        return s
     }
 }
