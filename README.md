@@ -11,6 +11,8 @@ Easy to use MacOS 11+ application for easy mocking iOS device and simulator loca
 - Easy to use map interface.
 - **Map Search**: Easily find specific addresses or points of interest using the integrated search bar to quickly jump to desired locations.
 - **Joystick Navigation**: smoothly move around the map using keyboard arrow keys (with adjustable speed in Single Point mode).
+- **Unified Logging**: All actions are logged to a rotating file at `~/Library/Logs/SimVirtualLocation/app.log` (max 1MB × 5 backups), with personally identifiable information (home directory, UDID, IPv6 link-local) automatically redacted.
+- **Strongly-typed Status**: Device connection state (`DeviceStatus`) and simulation state (`SimulationStatus`) are modelled as enums, so the UI always shows a consistent localized label.
 
 You can download compiled and signed app [here](https://skywalker-howardhoward.netlify.app/).
 
@@ -30,7 +32,9 @@ You can download compiled and signed app [here](https://skywalker-howardhoward.n
 The application features several global keyboard shortcuts for a seamless experience:
 - **Joystick Navigation**: In **Single Point** mode, use the **Arrow Keys** (Up, Down, Left, Right) to smoothly move your location around the map like a joystick.
   - **Speed Adjustments**: Use the `Speed` slider to increase or decrease the distance the joystick moves per frame.
-  - **Safe Execution**: The actual location on your physical device is only updated *after* you release the arrow keys (to prevent timeout crashes), and *only if* the device is successfully connected and started. If you haven't clicked `Start` yet, the joystick will only move the Point A marker on the map.
+  - **Live update vs. dry-run**: The joystick respects the current simulation state:
+    - If the device is **already mocking** (simulation status is non-idle and tunnel is connected), arrow keys update the device location in real-time (throttled by `Update interval`).
+    - If the device is **not mocking yet**, arrow keys only move the marker on the map; nothing is sent to the device until you click `Start` (or set Point A explicitly).
 - **Escape (`Esc`)**: Instantly unfocus the Search bar so you can quickly return to using the Joystick without accidentally typing into the search field.
 - **Debug Mode (`d`)**: Press the `d` key to quickly toggle the debug panel.
 
@@ -105,6 +109,18 @@ swift test
 ```
 
 For detailed Swift Package configuration, see [SWIFT_PACKAGE_SETUP.md](./SWIFT_PACKAGE_SETUP.md).
+
+## Logs & Troubleshooting
+
+All app activity is appended to `~/Library/Logs/SimVirtualLocation/app.log`. The file is automatically rotated when it reaches 1 MB; up to five historical files (`app.log.1` … `app.log.5`) are kept. Sensitive identifiers (home directory, device UDIDs, link-local IPv6 addresses) are stripped before being written to the file or the in-app debug panel.
+
+You can inspect the live tail in Terminal:
+
+```bash
+tail -f ~/Library/Logs/SimVirtualLocation/app.log
+```
+
+To copy the in-memory log buffer (last 500 entries) to the clipboard, click the **Logs** button in the side panel.
 
 ## FAQ
 

@@ -138,44 +138,30 @@ Use `// MARK:` comments to organize code sections in this order:
 - Use view modifiers for reusable UI patterns
 
 ### Concurrency
-- Use `async/await` for asynchronous operations
-- Mark async functions with `async throws` when appropriate
-- Use `Task { @MainActor in ... }` for main thread updates
-- Use `DispatchQueue` for background work when needed (legacy pattern)
-- Example: `func refreshDevices() async { ... }`
+- **Controllers are isolated to `@MainActor`.** UI state (`@Published` properties) and view-bound work happens on the main actor by default; only delegate methods that the system invokes off-main are explicitly marked `nonisolated` (currently the `CLLocationManagerDelegate` callbacks). Those nonisolated methods hop back via `Task { @MainActor in ... }`.
+- Use `async/await` for any external command. The `Runner` class wraps every `Process` with `await waitExit(_:)` so callers never block the main actor.
+- **Do not use `DispatchQueue.main.async`.** Replace with `Task { @MainActor in ... }` (when called from a non-MainActor context) or just call the method directly when already on `@MainActor`. The codebase no longer contains any `DispatchQueue` usage in the main app target.
+- Background work that must escape the main actor (e.g., the `NSAppleScript` sudo prompt for the RSD tunnel) uses `Task.detached(priority: .userInitiated)` and explicitly hops back via `await MainActor.run { ... }` to mutate UI state.
+- `Timer.scheduledTimer` callbacks run on the current run loop; when they touch `@MainActor` state we wrap the body in `Task { @MainActor in ... }`.
 
 ### Error Handling
-- Use `try/catch` for operations that can fail
-- Show user-friendly alerts via `showAlert(_ text: String)` method
-- Log errors to console with `print()` for debugging
-- Custom errors should conform to `Error` and `CustomStringConvertible`
-- Example:
-  ```swift
-  do {
-      try task.run()
-  } catch {
-      showAlert(error.localizedDescription)
-      return
-  }
-  ```
+- Use `try/catch` for operations that can fail.
+- Show user-friendly alerts via `showAlert(_ text: String)` on `LocationController`.
+- **Never use `print(...)` in production code.** All diagnostics go through `AppLogger.shared` so they are sanitized, persisted, and rotated.
+- Custom errors should conform to `Error` and `CustomStringConvertible`.
 
 ### Optional Handling
-- Use `guard let` for early returns: `guard let location = locationManager.location else { return }`
-- Use `if let` for conditional unwrapping when needed
-- Use optional chaining for safe property access: `device?.id`
-- Avoid force unwrapping (`!`) unless absolutely certain value exists
+- Use `guard let` for early returns.
+- Use `if let` for conditional unwrapping when needed.
+- Avoid force unwrapping (`!`) unless absolutely certain value exists.
 
 ### Closures
-- Use trailing closure syntax when it's the last parameter
-- Use `[unowned self]` or `[weak self]` capture lists to prevent retain cycles
-- Prefer `[unowned self]` in contexts where self is guaranteed to exist
-- Example: `timer = Timer.scheduledTimer(...) { [unowned self] timer in ... }`
+- Use trailing closure syntax when it's the last parameter.
+- Use `[weak self]` capture lists to prevent retain cycles, especially in `Timer` callbacks and asynchronous `MKLocalSearch` continuations.
 
 ### Comments
-- Write comments for complex logic or non-obvious behavior
-- Avoid redundant comments that just restate the code
-- Use `// MARK:` to organize code sections
-- Document public API with clear descriptions
+- All inline comments are written in **Traditional Chinese**. Doc comments for type-level public APIs may stay in English when they document protocol semantics, but everything inside method bodies should be Chinese.
+- Use `// MARK:` to organize code sections.
 
 ---
 
@@ -183,23 +169,44 @@ Use `// MARK:` comments to organize code sections in this order:
 
 ### App Structure
 - **Main.swift:** App entry point with `@main` and SwiftUI `App` protocol
-- **Controllers:** Business logic classes (e.g., `LocationController`) conforming to `ObservableObject`
+- **Controllers:** Business logic classes (e.g., `LocationController`, all annotated `@MainActor`) conforming to `ObservableObject`
 - **Views:** SwiftUI views organized by feature (iOS/, Android/, Map, etc.)
-- **Models:** Data structures (Device, Simulator, Track, Location, LogEntry)
-- **Logic:** Utility classes (Runner, NotificationSender)
+- **Models:** Data structures (`Device`, `Simulator`, `Track`, `Location`, `LogEntry`, `DeviceStatus`, `SimulationStatus`)
+- **Logic:** Utility classes (`Runner`, `NotificationSender`, `AppLogger`)
 
 ### Key Components
-- **LocationController:** Main business logic coordinator, owns `MapView` and `Runner`. Manages state such as `isDeviceReady` to ensure location updates (via joystick, map click, or search) are only sent to the device if it has been started and successfully connected.
-- **Runner:** Handles execution of external commands (pymobiledevice3, adb, xcrun)
-- **MapView:** Wraps `MKMapView` in SwiftUI using `NSViewRepresentable`
-- **ContentView:** Root view assembling all UI components. Serves as the centralized manager for global keyboard shortcuts (e.g., `Esc` to unfocus, `d` for debug mode, and arrow keys for joystick movement), utilizing `@FocusState` to prevent conflicts with text input fields like the Search Bar.
+- **LocationController:** Main `@MainActor` business logic coordinator, owns `MapView` and `Runner`. Maintains `deviceStatus: DeviceStatus` (replaces the legacy `Bool isDeviceActive` + `String tunnelStatus`) and `simulationStatus: SimulationStatus` (replaces `Bool isSimulating` + `simulationType`). Computed property `isDeviceReady` ensures location updates only fire when the iOS tunnel is connected.
+- **Runner:** Handles execution of external commands (pymobiledevice3, adb, xcrun) using `async/await`. No `DispatchQueue` left.
+- **AppLogger:** Singleton logger (see "Logging" below).
+- **MapView:** Wraps `MKMapView` in SwiftUI using `NSViewRepresentable`.
+- **ContentView:** Root view assembling all UI components. Serves as the centralized manager for global keyboard shortcuts (`Esc` to unfocus, `d` for debug mode, arrow keys for joystick), utilizing `@FocusState` to prevent conflicts with text input fields.
+
+### Status Enums (`Models/DeviceStatus.swift`)
+- `DeviceStatus`: `.idle`, `.checkingDeveloperMode`, `.waitingAuthorization`, `.mounting`, `.connecting`, `.connected`, `.error(String)`. Use `deviceStatus.displayText` whenever a UI button needs to show progress; use `deviceStatus.isReady` to gate hardware updates.
+- `SimulationStatus`: `.idle`, `.route`, `.fromAToB`, `.mocking`. The joystick uses `simulationStatus.isMockingActive` to decide whether arrow keys should send live updates to the hardware.
+- When you add a new status, also add the localized `displayText` so UI never has to format strings inline.
+
+### Logging (`Logic/Logger.swift`)
+- All logging must go through `AppLogger.shared`. Helpers: `.debug(_:)`, `.info(_:)`, `.warn(_:)`, `.error(_:)` (each takes an `@autoclosure`).
+- Output destinations:
+  - stdout (level ≥ debug)
+  - File at `~/Library/Logs/SimVirtualLocation/app.log` (rotated at 1 MB × 5 backups: `app.log.1` … `app.log.5`)
+  - An observer registered by `LocationController` that pushes the most recent 500 entries to `@Published var logs: [LogEntry]` for the SwiftUI debug panel.
+- Format: `[<ISO8601>] [<LEVEL>] [<File:Line>] <message>`.
+- All log messages run through `Sanitizer.sanitize(_:)` which redacts:
+  - The user's home directory (replaced by `~`)
+  - `/Users/<name>/...` paths
+  - 25-/40-char hex UDIDs and standard UUIDs
+  - IPv6 link-local addresses (e.g. `fe80::...%enX`)
+- **Never** call `print(...)` directly. Use `AppLogger` so output is sanitized and persisted.
 
 ### Data Flow
 1. User interacts with SwiftUI views or triggers global key events (managed in `ContentView`).
 2. Views call methods on `@ObservedObject LocationController`.
 3. LocationController updates `@Published` properties (triggers UI updates) and updates map annotations (e.g., `addLocation` handles placing Point A and conditionally triggering a run).
 4. LocationController delegates command execution to `Runner` only when `isDeviceReady` is true.
-5. Runner executes external processes and reports results via callbacks.
+5. Runner runs external processes asynchronously and reports back via callbacks/return values.
+6. All diagnostics (controller, runner, delegates) flow through `AppLogger`.
 
 ---
 
@@ -224,17 +231,15 @@ Use `// MARK:` comments to organize code sections in this order:
 5. Update `ContentView` to include new view if needed
 
 ### Working with External Commands
-- Use `Runner.taskForIOS()` for pymobiledevice3 commands
-- Use `Runner.taskForAndroid()` for adb commands
-- Always handle errors with `try/catch` and show user alerts
-- Log command execution with `log()` method
-- Example in `LocationController.swift` (mountDeveloperImage, runOnAndroid)
+- Use `Runner.taskForIOS(args:)` for pymobiledevice3 commands (note: it now throws when the binary is missing instead of taking a `showAlert` callback). Catch the error at the call site if you need a UI alert.
+- Use `Runner.taskForAndroid(args:adbPath:)` for adb commands.
+- Always handle errors with `try/catch`. For UI alerts, call `LocationController.showAlert(_:)`.
+- Log command execution via `AppLogger.shared.debug(...)` (do **not** call `print` directly).
 
 ### Debugging
-- Use `print()` for console logging during development
-- Use `log(_ message:)` to add entries to the in-app log viewer
-- Check `LocationController.logs` array for runtime diagnostics
-- External command output captured via `Pipe()` objects
+- All diagnostics: `AppLogger.shared.debug(...)`/`info(...)`/`warn(...)`/`error(...)`.
+- The in-app log panel (`d` key) shows the last 500 entries; full history is at `~/Library/Logs/SimVirtualLocation/app.log` (rotated).
+- External command output is captured via `Pipe()` objects.
 
 ---
 
