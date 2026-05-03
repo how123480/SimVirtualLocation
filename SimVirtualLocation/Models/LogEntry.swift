@@ -7,10 +7,21 @@
 
 import Foundation
 
+/// Log entry for UI display
 struct LogEntry: Identifiable {
 
-    var id: Date { date }
-
+    let id: UUID
     let date: Date
+    let level: LogLevel
     let message: String
+    /// Log source (filename:line)
+    let location: String
+
+    init(id: UUID = UUID(), date: Date, level: LogLevel = .info, message: String, location: String = "") {
+        self.id = id
+        self.date = date
+        self.level = level
+        self.message = message
+        self.location = location
+    }
 }
