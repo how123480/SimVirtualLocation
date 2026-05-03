@@ -43,6 +43,100 @@ class Runner {
         return false
     }
 
+    enum DeveloperModeStatus {
+        case enabled        
+        case needsManual    
+        case failed(String) 
+    }
+
+    func checkDeveloperModeStatus(udid: String) async -> Bool {
+        do {
+            let task = try await self.taskForIOS(
+                args: ["amfi", "developer-mode-status", "--udid", udid],
+                showAlert: { _ in }
+            )
+            
+            let outputPipe = Pipe()
+            task.standardOutput = outputPipe
+            
+            try task.run()
+            
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                task.terminationHandler = { _ in
+                    continuation.resume()
+                }
+            }
+            
+            let data = outputPipe.fileHandleForReading.readDataToEndOfFile()
+            let output = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            
+            self.log?("Developer Mode status for \(udid): \(output)")
+            
+            // Returns true if output contains "true", otherwise false
+            return output.contains("true")
+        } catch {
+            self.log?("Failed to check developer-mode-status: \(error.localizedDescription)")
+            return false
+        }
+    }
+
+    func enableDeveloperMode(udid: String) async -> DeveloperModeStatus {
+        do {
+            let task = try await self.taskForIOS(
+                args: ["amfi", "enable-developer-mode", "--udid", udid],
+                showAlert: { _ in }
+            )
+            
+            self.log?("Checking Developer Mode for device \(udid)...")
+            
+            let errorPipe = Pipe()
+            task.standardError = errorPipe
+            
+            try task.run()
+            
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                task.terminationHandler = { _ in
+                    continuation.resume()
+                }
+            }
+            
+            if let errorData = try? errorPipe.fileHandleForReading.readToEnd() {
+                let error = String(decoding: errorData, as: UTF8.self)
+                if error.contains("passcode is set") {
+                    return .needsManual
+                } else if error.contains("DeveloperModeDisabled") {
+                    return .needsManual
+                } else if !error.isEmpty && !self.shouldSuppressError(error) {
+                    self.log?("Developer Mode Trigger output: \(error.trimmingCharacters(in: .whitespacesAndNewlines))")
+                }
+            }
+            
+            return task.terminationStatus == 0 ? .enabled : .failed("Exit code \(task.terminationStatus)")
+        } catch {
+            return .failed(error.localizedDescription)
+        }
+    }
+
+    func revealDeveloperMode(udid: String) async {
+        do {
+            let task = try await self.taskForIOS(
+                args: ["amfi", "reveal-developer-mode", "--udid", udid],
+                showAlert: { _ in }
+            )
+            
+            self.log?("Revealing Developer Mode menu for device \(udid)...")
+            try task.run()
+            
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                task.terminationHandler = { _ in
+                    continuation.resume()
+                }
+            }
+        } catch {
+            self.log?("Failed to reveal-developer-mode: \(error.localizedDescription)")
+        }
+    }
+
     func stopCurrentTask() async {
         guard let task = currentTask, task.isRunning else {
             return

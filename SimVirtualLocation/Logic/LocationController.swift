@@ -590,8 +590,6 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
 
         Task { @MainActor in
             self.tunnelStatus = "Mounting..."
-            self.isDeviceActive = true
-
             let mountTask = try await runner.taskForIOS(
                 args: [
                     "mounter",
@@ -654,10 +652,30 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
     }
 
     func startDevice() {
-        if useRSD {
-            startRSDTunnel()
-        } else {
-            mountDeveloperImage()
+        guard !selectedDevice.isEmpty else {
+            showAlert("No device selected")
+            return
+        }
+
+        Task { @MainActor in
+            self.tunnelStatus = "Checking Dev Mode..."
+            self.isDeviceActive = true
+            
+            let isEnabled = await runner.checkDeveloperModeStatus(udid: selectedDevice)
+            
+            if !isEnabled {
+                await runner.revealDeveloperMode(udid: selectedDevice)
+                self.isDeviceActive = false
+                self.tunnelStatus = ""
+                self.showAlert(Constants.developerModeInstructions)
+                return
+            }
+
+            if useRSD {
+                startRSDTunnel()
+            } else {
+                mountDeveloperImage()
+            }
         }
     }
 
@@ -695,11 +713,6 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
     }
 
     func startRSDTunnel() {
-        guard !isDeviceActive else {
-            showAlert("Tunnel is already running")
-            return
-        }
-
         let deviceId = selectedDevice
         if deviceId.isEmpty {
             showAlert("No device selected")
@@ -879,7 +892,7 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
     }
     func showAlert(_ text: String) {
         DispatchQueue.main.async {
-            self.alertText = text
+           self.alertText = text
             self.showingAlert = true
             self.isSimulating = false
         }
@@ -1451,4 +1464,13 @@ private enum Constants {
 
     static let defaultsSavedLocationsPathKey = "saved_locations"
     static let defaultsXcodePathKey = "xcode_path"
+    static let developerModeInstructions = """
+    Developer Mode Required:
+    
+    1. Open 'Settings' on your iPhone.
+    2. Go to 'Privacy & Security'.
+    3. Scroll to the bottom and tap 'Developer Mode'.
+    4. Turn the switch ON.
+    5. Your device will restart.
+    """
 }
