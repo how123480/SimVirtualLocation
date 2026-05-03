@@ -967,7 +967,7 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
                     DispatchQueue.main.async { [weak self] in
                         self?.RSDPort = port
                         self?.tunnelStatus = "Connected"
-                        self?.showAlert("RSD tunnel connected!\nAddress: \(self?.RSDAddress ?? "")\nPort: \(port)")
+                        self?.showAlert("RSD tunnel connected!")
                     }
                 }
             }
