@@ -52,7 +52,9 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
     /// Compatibility field for LocationSettingsPanel
     var simulationType: SimulationStatus { simulationStatus }
 
-    @Published var speed: Double = 60.0
+    @Published var speed: Double = 15.0 {
+        didSet { handleSpeedChange(oldValue: oldValue) }
+    }
     @Published var pointsMode: PointsMode = .single {
         didSet { handlePointsModeChange() }
     }
@@ -136,6 +138,7 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
 
     private let mapView: MapView
     private let runner = Runner()
+    private lazy var gpxPlayback = GPXPlayback(runner: runner)
     private let currentSimulationAnnotation = MKPointAnnotation()
     private let locationManager = CLLocationManager()
     private let completer = MKLocalSearchCompleter()
@@ -151,6 +154,12 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
     private var currentTrackIndex: Int = 0
     private var lastTrackLocation: CLLocationCoordinate2D?
     private var tracksTimes: [Track: Double] = [:]
+
+    /// Full polyline, written by simulateRoute / simulateFromAToB;
+    /// Used to regenerate GPX when speed dynamically changes.
+    private var currentPolyline: [CLLocationCoordinate2D] = []
+    /// Prevents continuous reschedule when speed changes, minimum interval 0.4s
+    private var pendingSpeedRegenTask: Task<Void, Never>?
 
     private var timer: Timer?
     private var lastRunnerUpdateTime: Date = .distantPast
@@ -231,6 +240,10 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
     }
 
     func setSelectedLocation() {
+        if isRouteSimulationActive {
+            logger.debug("Ignoring setSelectedLocation: route simulation is active")
+            return
+        }
         guard let annotation = annotations.first else {
             showAlert("Point A not selected")
             return
@@ -297,14 +310,20 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
 
         let buffer = UnsafeBufferPointer(start: route.polyline.points(), count: route.polyline.pointCount)
         tracks = []
-        for i in 0..<route.polyline.pointCount where i + 1 < route.polyline.pointCount {
-            tracks.append(Track(startPoint: buffer[i], endPoint: buffer[i + 1]))
+        var polyline: [CLLocationCoordinate2D] = []
+        for i in 0..<route.polyline.pointCount {
+            polyline.append(buffer[i].coordinate)
+            if i + 1 < route.polyline.pointCount {
+                tracks.append(Track(startPoint: buffer[i], endPoint: buffer[i + 1]))
+            }
         }
         logger.debug("Total route segments: \(tracks.count)")
 
         invalidateState()
+        currentPolyline = polyline
         simulationStatus = .route
         startMovementTimer()
+        kickoffGPXPlaybackIfNeeded()
     }
 
     func simulateFromAToB() {
@@ -321,9 +340,11 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
         mapView.mkMapView.addOverlay(polyline, level: .aboveRoads)
 
         tracks = [Track(startPoint: MKMapPoint(startPoint.coordinate), endPoint: MKMapPoint(endPoint.coordinate))]
+        currentPolyline = [startPoint.coordinate, endPoint.coordinate]
         invalidateState()
         simulationStatus = .fromAToB
         startMovementTimer()
+        kickoffGPXPlaybackIfNeeded()
     }
 
     private func startMovementTimer() {
@@ -382,6 +403,9 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
 
     func stopSimulation(clearAnnotations: Bool = true) {
         simulationStatus = .idle
+        pendingSpeedRegenTask?.cancel()
+        pendingSpeedRegenTask = nil
+        Task { await gpxPlayback.stop() }
         Task { await runner.stopCurrentTask() }
         timer?.invalidate()
         timer = nil
@@ -390,6 +414,7 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
         mapView.mkMapView.removeOverlays(mapView.mkMapView.overlays)
         route = nil
         tracks = []
+        currentPolyline = []
 
         if clearAnnotations {
             mapView.mkMapView.removeAnnotations(mapView.mkMapView.annotations)
@@ -774,6 +799,10 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
     }
 
     func setToCoordinate(latString: String = "", lngString: String = "") {
+        if isRouteSimulationActive {
+            logger.debug("Ignoring setToCoordinate: route simulation is active")
+            return
+        }
         guard let lat = Double(latString), let lng = Double(lngString) else {
             showAlert("Coordinate format error")
             return
@@ -848,11 +877,15 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
         let track = tracks[currentTrackIndex]
         let move = track.getNextLocation(from: lastTrackLocation, speed: (speed / 3.6) * scale)
 
+        // In GPX mode, the pymobiledevice3 play process handles moving the device location;
+        // The local timer only updates the orange puck on the map and no longer calls run(location:).
+        let isGPXActive = gpxPlayback.isPlaying
+
         switch move {
         case .moveTo(let to, _, _):
             lastTrackLocation = to
-            // To avoid command flooding, send every timeScale seconds
-            if Date().timeIntervalSince(lastRunnerUpdateTime) >= timeScale {
+            if !isGPXActive,
+               Date().timeIntervalSince(lastRunnerUpdateTime) >= timeScale {
                 run(location: to)
                 lastRunnerUpdateTime = Date()
             }
@@ -861,8 +894,10 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
         case .finishTo(let to, _, _):
             lastTrackLocation = nil
             currentTrackIndex += 1
-            run(location: to)
-            lastRunnerUpdateTime = Date()
+            if !isGPXActive {
+                run(location: to)
+                lastRunnerUpdateTime = Date()
+            }
             currentSimulationAnnotation.coordinate = to
         }
 
@@ -872,6 +907,97 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
         if !mapView.mkMapView.annotations.contains(where: { $0 === currentSimulationAnnotation }) {
             mapView.mkMapView.addAnnotation(currentSimulationAnnotation)
         }
+    }
+
+    // MARK: - GPX Playback Orchestration
+
+    /// Whether currently running Route / A→B (used for A/B lock UI)
+    var isRouteSimulationActive: Bool {
+        simulationStatus == .route || simulationStatus == .fromAToB
+    }
+
+    /// Whether the current conditions allow for GPX path: iOS physical device + RSD/legacy both supported
+    private var shouldUseGPXPlayback: Bool {
+        deviceType == 0 && deviceMode == .device && isDeviceReady
+    }
+
+    /// Based on current useRSD setting, returns GPXPlayback.Endpoint
+    private func currentGPXEndpoint() -> GPXPlayback.Endpoint? {
+        guard !selectedDevice.isEmpty else { return nil }
+        if useRSD {
+            guard !RSDAddress.isEmpty, !RSDPort.isEmpty else { return nil }
+            return .rsd(udid: selectedDevice, address: RSDAddress, port: RSDPort)
+        }
+        return .legacy(udid: selectedDevice)
+    }
+
+    /// Called at the start of simulateRoute / simulateFromAToB:
+    /// If conditions match -> generates GPX and starts pymobiledevice3 play
+    private func kickoffGPXPlaybackIfNeeded() {
+        guard shouldUseGPXPlayback,
+              let endpoint = currentGPXEndpoint(),
+              currentPolyline.count >= 2 else { return }
+        startGPXPlayback(polyline: currentPolyline, endpoint: endpoint, reason: "initial")
+    }
+
+    /// Triggered when speed dynamically changes: restarts playback with a new GPX starting from the current puck position.
+    /// Does not "restart from point A".
+    private func handleSpeedChange(oldValue: Double) {
+        guard isRouteSimulationActive, gpxPlayback.isPlaying else { return }
+        guard abs(oldValue - speed) > 0.1 else { return }
+        // Simple throttle: cancel the previous pending task and reschedule for 0.4s later to avoid excessive restarts while dragging the slider
+        pendingSpeedRegenTask?.cancel()
+        pendingSpeedRegenTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 400_000_000)
+            if Task.isCancelled { return }
+            guard self.isRouteSimulationActive, self.gpxPlayback.isPlaying else { return }
+            guard let endpoint = self.currentGPXEndpoint() else { return }
+            let remaining = self.remainingPolyline()
+            guard remaining.count >= 2 else { return }
+            self.startGPXPlayback(polyline: remaining, endpoint: endpoint, reason: "speed=\(Int(self.speed))km/h")
+        }
+    }
+
+    /// Shared: Write file + start GPXPlayback
+    private func startGPXPlayback(
+        polyline: [CLLocationCoordinate2D],
+        endpoint: GPXPlayback.Endpoint,
+        reason: String
+    ) {
+        do {
+            let name = "route-\(Int(Date().timeIntervalSince1970))-\(UUID().uuidString.prefix(6))"
+            let url = try GPXGenerator.render(
+                polyline: polyline,
+                speedKmh: speed,
+                name: name
+            )
+            logger.info("GPX written (\(reason)): \(url.path) – \(polyline.count) nodes @ \(Int(speed)) km/h")
+            GPXGenerator.pruneOldFiles()
+
+            let alert: (String) -> Void = { [weak self] msg in
+                Task { @MainActor in self?.showAlert(msg) }
+            }
+            Task { @MainActor in
+                await self.gpxPlayback.start(gpxURL: url, endpoint: endpoint, alert: alert)
+            }
+        } catch {
+            logger.error("Failed to write GPX: \(error.localizedDescription)")
+            showAlert("Failed to write GPX: \(error.localizedDescription)")
+        }
+    }
+
+    /// Calculates the remaining polyline from "current position -> route end".
+    /// If lastTrackLocation is nil, it means just switched to the next track, using that track's start point.
+    private func remainingPolyline() -> [CLLocationCoordinate2D] {
+        guard !tracks.isEmpty, currentTrackIndex < tracks.count else { return [] }
+        var pts: [CLLocationCoordinate2D] = []
+        let track = tracks[currentTrackIndex]
+        pts.append(lastTrackLocation ?? track.startPoint.coordinate)
+        pts.append(track.endPoint.coordinate)
+        for i in (currentTrackIndex + 1)..<tracks.count {
+            pts.append(tracks[i].endPoint.coordinate)
+        }
+        return pts
     }
 
     private func executeAdbCommand(args: [String], successMessage: String? = nil) {
@@ -908,6 +1034,10 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
     }
 
     private func handlePointsModeChange() {
+        if isRouteSimulationActive {
+            // Mode switching is not allowed during simulation (would cause A/B to be deleted)
+            return
+        }
         if pointsMode == .single {
             stopSimulation(clearAnnotations: false)
             if annotations.count == 2, let second = annotations.last {
@@ -925,6 +1055,11 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
     }
 
     private func addLocation(coordinate: CLLocationCoordinate2D) {
+        // Lock points A and B during Route / A→B simulation: Stop must be pressed before changes can be made.
+        if isRouteSimulationActive {
+            logger.debug("Ignoring map click: route simulation is active, A/B locked")
+            return
+        }
         if pointsMode == .single {
             mapView.mkMapView.removeAnnotations(annotations)
             annotations = []
@@ -1085,8 +1220,8 @@ private extension LocationController {
 extension LocationController {
 
     func handleKeyEvent(_ event: NSEvent) {
-        // Do not process during Dialog / Alert / text input
-        guard pointsMode == .single, !showingAlert, !isShowingDialog else { return }
+        // Do not process during Dialog / Alert / text input / Route simulation
+        guard pointsMode == .single, !showingAlert, !isShowingDialog, !isRouteSimulationActive else { return }
         if let fr = NSApp.keyWindow?.firstResponder, fr.isKind(of: NSTextView.self) { return }
 
         let isDown = event.type == .keyDown

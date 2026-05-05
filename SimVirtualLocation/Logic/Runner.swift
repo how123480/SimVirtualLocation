@@ -210,6 +210,43 @@ class Runner {
         }
     }
 
+    // MARK: - iOS GPX Playback (long-running)
+
+    /// Plays GPX file via pymobiledevice3, suitable for iOS 16 and below.
+    /// This process will continue running until the GPX ends or it is terminated by SIGTERM.
+    func playGPXLegacy(
+        udid: String,
+        gpxURL: URL,
+        showAlert: @escaping (String) -> Void
+    ) async throws {
+        let task = try await taskForIOS(args: [
+            "developer", "simulate-location", "play",
+            "--udid", udid,
+            gpxURL.path,
+        ])
+        try await runLocationTask(task, label: "iOS legacy GPX play", showAlert: showAlert)
+    }
+
+    /// Plays GPX file via pymobiledevice3, suitable for iOS 17+ RSD mode.
+    func playGPXRSD(
+        udid: String,
+        gpxURL: URL,
+        RSDAddress: String,
+        RSDPort: String,
+        showAlert: @escaping (String) -> Void
+    ) async throws {
+        guard !RSDAddress.isEmpty, !RSDPort.isEmpty else {
+            showAlert("RSD Address / Port not yet obtained")
+            return
+        }
+        let task = try await taskForIOS(args: [
+            "developer", "dvt", "simulate-location", "play",
+            "--rsd", RSDAddress, RSDPort,
+            gpxURL.path,
+        ])
+        try await runLocationTask(task, label: "iOS RSD GPX play", showAlert: showAlert)
+    }
+
     // MARK: - Android Location
 
     func runOnAndroid(
