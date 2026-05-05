@@ -160,7 +160,7 @@ Use `// MARK:` comments to organize code sections in this order:
 - Use `[weak self]` capture lists to prevent retain cycles, especially in `Timer` callbacks and asynchronous `MKLocalSearch` continuations.
 
 ### Comments
-- All inline comments are written in **Traditional Chinese**. Doc comments for type-level public APIs may stay in English when they document protocol semantics, but everything inside method bodies should be Chinese.
+- All inline comments are written in **English**.
 - Use `// MARK:` to organize code sections.
 
 ---
@@ -175,11 +175,26 @@ Use `// MARK:` comments to organize code sections in this order:
 - **Logic:** Utility classes (`Runner`, `NotificationSender`, `AppLogger`)
 
 ### Key Components
-- **LocationController:** Main `@MainActor` business logic coordinator, owns `MapView` and `Runner`. Maintains `deviceStatus: DeviceStatus` (replaces the legacy `Bool isDeviceActive` + `String tunnelStatus`) and `simulationStatus: SimulationStatus` (replaces `Bool isSimulating` + `simulationType`). Computed property `isDeviceReady` ensures location updates only fire when the iOS tunnel is connected.
-- **Runner:** Handles execution of external commands (pymobiledevice3, adb, xcrun) using `async/await`. No `DispatchQueue` left.
+- **LocationController:** Main `@MainActor` business logic coordinator, owns `MapView`, `Runner`, and `GPXPlayback`. Maintains `deviceStatus: DeviceStatus` (replaces the legacy `Bool isDeviceActive` + `String tunnelStatus`) and `simulationStatus: SimulationStatus` (replaces `Bool isSimulating` + `simulationType`). Computed property `isDeviceReady` ensures location updates only fire when the iOS tunnel is connected. Computed property `isRouteSimulationActive` is used to lock A/B annotations during route simulation.
+- **Runner:** Handles execution of external commands (pymobiledevice3, adb, xcrun) using `async/await`. Provides both per-point `set` calls (`runOnIos` / `runOnNewIos`) and long-running `play` calls (`playGPXLegacy` / `playGPXRSD`). No `DispatchQueue` left.
+- **GPXGenerator (Logic/GPXGenerator.swift):** Pure data tool. Takes a polyline + speed (km/h), uniformly samples points 1 second apart in time (`stepDistance = speed_mps * sampleInterval`), serialises to GPX 1.1 XML and writes to `~/Library/Application Support/SimVirtualLocation/routes/<name>.gpx`. Auto-prunes when more than 50 files accumulate.
+- **GPXPlayback (Logic/GPXGenerator.swift):** `@MainActor` lifecycle wrapper around `pymobiledevice3 ... simulate-location play`. Tracks the currently playing GPX URL and endpoint (`legacy(udid)` / `rsd(udid, address, port)`). `start(...)` cancels any previous task before launching the new one; `stop()` terminates and clears state.
 - **AppLogger:** Singleton logger (see "Logging" below).
 - **MapView:** Wraps `MKMapView` in SwiftUI using `NSViewRepresentable`.
 - **ContentView:** Root view assembling all UI components. Serves as the centralized manager for global keyboard shortcuts (`Esc` to unfocus, `d` for debug mode, arrow keys for joystick), utilizing `@FocusState` to prevent conflicts with text input fields.
+
+### Route / A→B simulation on iOS device (GPX path)
+
+When the user starts **Simulate Route** or **A→B Linear Simulation** with `deviceType == 0 && deviceMode == .device && deviceStatus.isReady`, the controller switches to the GPX path:
+
+1. `simulateRoute()` / `simulateFromAToB()` build `tracks` (linear segments, used for the on-screen orange puck) **and** `currentPolyline: [CLLocationCoordinate2D]` — the full poly used for GPX generation.
+2. `kickoffGPXPlaybackIfNeeded()` calls `GPXGenerator.render(polyline:speedKmh:name:)` to write a new file (e.g. `route-1717327200-3f9a2d.gpx`), then calls `GPXPlayback.start(gpxURL:endpoint:alert:)`. `pymobiledevice3` walks through the file at 1 trkpt/second.
+3. The local 0.1 s timer (`startMovementTimer` → `performMovement`) keeps moving the visual puck. Crucially, when `gpxPlayback.isPlaying == true`, `performMovement` skips `run(location:)` so we never double-drive the device.
+4. **Dynamic speed change without restart from A.** `@Published var speed` has a `didSet` that calls `handleSpeedChange(oldValue:)`. After a 0.4 s debounce (so dragging the slider doesn't thrash), it calls `remainingPolyline()` (= current track's puck position → end of route) and feeds it back to `startGPXPlayback(...)`. The new GPX is written, the previous `pymobiledevice3 play` is SIGTERMed, and a new one starts at the user's *current* visual position. The map puck does not jump.
+5. **A/B lock during simulation.** `isRouteSimulationActive` (= `simulationStatus == .route || .fromAToB`) gates `addLocation`, `setSelectedLocation`, `setToCoordinate`, `handlePointsModeChange`, and the joystick (`handleKeyEvent`). All of those silently no-op so map clicks, search, "Apply to A", or arrow keys can't reset the route mid-flight. Only `stopSimulation()` clears the lock.
+6. **Update interval picker** (`timeScale`) is hidden in `LocationSettingsPanel` when iOS device GPX path is active because the cadence is intrinsic to the GPX file.
+
+For iOS Simulator and Android, Route / A→B keep the original per-tick approach (`Runner.runOnSimulator` via `DistributedNotificationCenter` / `Runner.runOnAndroid` via `adb am broadcast`), since neither has a GPX equivalent.
 
 ### Status Enums (`Models/DeviceStatus.swift`)
 - `DeviceStatus`: `.idle`, `.checkingDeveloperMode`, `.waitingAuthorization`, `.mounting`, `.connecting`, `.connected`, `.error(String)`. Use `deviceStatus.displayText` whenever a UI button needs to show progress; use `deviceStatus.isReady` to gate hardware updates.
@@ -281,5 +296,5 @@ Use `// MARK:` comments to organize code sections in this order:
 
 ---
 
-**Last Updated:** 2024-02-03  
+**Last Updated:** 2026-05-05  
 **Project Version:** Latest (check git tags/releases)

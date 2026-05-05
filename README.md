@@ -8,6 +8,10 @@ Easy to use MacOS 11+ application for easy mocking iOS device and simulator loca
 - Set location to current Mac's location.
 - Set location to a specific point on the map.
 - Create a route between multiple points and simulate moving with desired speed.
+- **GPX-based route playback for iOS devices.** When simulating a Route or A→B path on a physical iOS device (works for both legacy and iOS 17+ RSD), the app generates a GPX file on the fly and hands it to `pymobiledevice3 ... simulate-location play`. This gives much smoother motion than per-tick `set` calls and removes the "Update interval" cap.
+  - **Live speed changes without restarting from A.** Dragging the speed slider regenerates the GPX from the puck's *current* position with the new cadence (debounced 0.4 s) and seamlessly restarts playback. The map marker does not jump back to A.
+  - **A/B lock while simulating.** During Route / A→B playback, map clicks, joystick, search, "Apply to A", and "Set to Current" are silently ignored — only the **Stop** button can release the lock.
+  - **GPX files are persisted** to `~/Library/Application Support/SimVirtualLocation/routes/`, named `route-<timestamp>-<rand>.gpx`, with up to 50 most-recent files kept for inspection / replay.
 - Easy to use map interface.
 - **Map Search**: Easily find specific addresses or points of interest using the integrated search bar to quickly jump to desired locations.
 - **Joystick Navigation**: smoothly move around the map using keyboard arrow keys (with adjustable speed in Single Point mode).
