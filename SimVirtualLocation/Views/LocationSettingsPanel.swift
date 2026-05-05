@@ -22,6 +22,20 @@ struct LocationSettingsPanel: View {
                locationController.deviceMode == .device && // Physical Device
                !locationController.deviceStatus.isReady
     }
+
+    /// iOS physical device + connected: Route / A→B follows GPX path, pymobiledevice3 controls its own pace,
+    /// therefore the Update interval menu is no longer needed.
+    private var isIOSDeviceGPXPath: Bool {
+        return locationController.deviceType == 0 &&
+               locationController.deviceMode == .device &&
+               locationController.deviceStatus.isReady
+    }
+
+    /// During Route / A→B simulation: Points are locked, disabling various "Modify A/B" entry points
+    private var isRouteSimulationActive: Bool {
+        locationController.simulationStatus == .route ||
+        locationController.simulationStatus == .fromAToB
+    }
     
     var body: some View {
         VStack {
@@ -114,7 +128,13 @@ struct LocationSettingsPanel: View {
                 }
                 
                     GroupBox {
-                        if locationController.useRSD {
+                        if isIOSDeviceGPXPath {
+                            // iOS physical device uses GPX, pymobiledevice3 has built-in pace; this field is no longer used
+                            Text("Playback driven by GPX – speed slider updates live without restarting from A.")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        } else if locationController.useRSD {
                             Picker("Update interval", selection: $locationController.timeScale) {
                                 Text("5s").tag(5.0)
                                 Text("10s").tag(10.0)
