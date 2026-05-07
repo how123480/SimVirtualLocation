@@ -879,7 +879,7 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
 
         // In GPX mode, the pymobiledevice3 play process handles moving the device location;
         // The local timer only updates the orange puck on the map and no longer calls run(location:).
-        let isGPXActive = gpxPlayback.isPlaying
+        let isGPXActive = shouldUseGPXPlayback
 
         switch move {
         case .moveTo(let to, _, _):
