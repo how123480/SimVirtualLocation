@@ -812,7 +812,6 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
             return
         }
         putLocationOnMap(location: .init(name: "", latitude: lat, longitude: lng))
-        run(location: .init(latitude: lat, longitude: lng))
     }
 
     func setToCoordinate(latLngString: String = "") {
@@ -1075,11 +1074,6 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
         annotation.title = annotations.isEmpty ? "A" : "B"
         annotations.append(annotation)
         mapView.mkMapView.addAnnotation(annotation)
-
-        // Single point mode + send location directly when device is ready
-        if pointsMode == .single && isDeviceReady {
-            run(location: coordinate)
-        }
     }
 
     /// Send location command to the corresponding device
