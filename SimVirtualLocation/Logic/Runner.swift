@@ -94,7 +94,7 @@ class Runner {
     func stopCurrentTask() async {
         guard let task = currentTask, task.isRunning else { return }
 
-        log.debug("Terminating previous location command")
+        log.debug("Terminating previous location command (PID: \(task.processIdentifier))")
         task.terminate()
 
         // Wait for process to end (max 2 seconds)
@@ -104,7 +104,10 @@ class Runner {
         }
 
         if task.isRunning {
-            log.warn("Old command did not end within time limit, forcing clear")
+            log.warn("Old command (PID: \(task.processIdentifier)) did not end within time limit, sending SIGKILL")
+            
+            // Short wait for SIGKILL to take effect
+            try? await Task.sleep(nanoseconds: 100_000_000)
         } else {
             log.debug("Old command has ended")
         }
@@ -224,7 +227,7 @@ class Runner {
             "--udid", udid,
             gpxURL.path,
         ])
-        try await runLocationTask(task, label: "iOS legacy GPX play", showAlert: showAlert)
+        try await runLongRunningTask(task, label: "iOS legacy GPX play", showAlert: showAlert)
     }
 
     /// Plays GPX file via pymobiledevice3, suitable for iOS 17+ RSD mode.
@@ -244,7 +247,50 @@ class Runner {
             "--rsd", RSDAddress, RSDPort,
             gpxURL.path,
         ])
-        try await runLocationTask(task, label: "iOS RSD GPX play", showAlert: showAlert)
+        try await runLongRunningTask(task, label: "iOS RSD GPX play", showAlert: showAlert)
+    }
+
+    /// Execute long-running task and discard output to avoid pipe buffer deadlock.
+    /// For short-lived commands (set location), use runLocationTask() which captures errors.
+    /// For long-running commands (play GPX), use this to prevent pipe buffer from filling up.
+    private func runLongRunningTask(
+        _ task: Process,
+        label: String,
+        showAlert: @escaping (String) -> Void
+    ) async throws {
+        log.debug("Executing \(label) location command: \(task.logDescription)")
+
+        currentTask = task
+
+        // Redirect output to /dev/null to prevent pipe buffer deadlock
+        // (pymobiledevice3 play outputs continuously for hours, filling the 64KB pipe buffer)
+        let devNull = FileHandle.nullDevice
+        task.standardInput = FileHandle.nullDevice
+        task.standardOutput = devNull
+        task.standardError = devNull
+
+        do {
+            try task.run()
+            await waitExit(task)
+            currentTask = nil
+
+            // For long-running tasks, we can't capture detailed errors since output is discarded
+            // Only log non-zero exit status (except SIGTERM which is expected)
+            if task.terminationStatus != 0 && task.terminationStatus != 15 {
+                let msg = "\(label) exited with status \(task.terminationStatus)"
+                log.warn(msg)
+                showAlert(msg)
+            } else if task.terminationStatus == 15 {
+                log.debug("\(label) terminated (SIGTERM)")
+            } else {
+                log.debug("\(label) completed successfully")
+            }
+        } catch {
+            currentTask = nil
+            showAlert(error.localizedDescription)
+            log.error("\(label) start failed: \(error.localizedDescription)")
+            throw error
+        }
     }
 
     // MARK: - Android Location

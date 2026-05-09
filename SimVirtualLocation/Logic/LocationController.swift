@@ -737,7 +737,7 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
     }
 
     private func killRSDTunnel(for udid: String) {
-        let script = "do shell script \"pkill -f 'pymobiledevice3.*\(udid)'\" with administrator privileges"
+        let script = "do shell script \"pkill -9 -f 'pymobiledevice3.*\(udid)'\" with administrator privileges"
         NSAppleScript(source: script)?.executeAndReturnError(nil)
         logger.info("Background tunnel processes cleared")
     }
@@ -948,7 +948,7 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
 
     /// Whether the current conditions allow for GPX path: iOS physical device + RSD/legacy both supported
     private var shouldUseGPXPlayback: Bool {
-        deviceType == 0 && deviceMode == .device && isDeviceReady
+         deviceType == 0 && deviceMode == .device && isDeviceReady
     }
 
     /// Based on current useRSD setting, returns GPXPlayback.Endpoint
