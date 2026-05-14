@@ -786,41 +786,16 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
     }
 
     func showAlert(_ text: String) {
-        // Ensure already on the main thread (class is marked @MainActor)
-        var message = text
+        // Map known textual patterns to AppError and funnel through ErrorHandler.
+        // Anything unrecognised is wrapped as .processFailed with empty cmd label.
         if text.contains("No route to host") {
-            message = "Tunnel disconnected (No route to host). Please restart the device connection."
-            
-            // 1. Reset all statuses
-            deviceStatus = .idle
-            simulationStatus = .idle
-            
-            // 2. Clear all map information
-            mapView.mkMapView.removeOverlays(mapView.mkMapView.overlays)
-            mapView.mkMapView.removeAnnotations(mapView.mkMapView.annotations)
-            annotations = []
-            route = nil
-            tracks = []
-            currentPolyline = []
-            
-            // 3. Stop all background tasks and timers
-            timer?.invalidate()
-            timer = nil
-            pendingSpeedRegenTask?.cancel()
-            pendingSpeedRegenTask = nil
-            
-            Task {
-                await gpxPlayback.stop()
-                await runner.stopCurrentTask()
-            }
-            
-            // 4. Kill specific background tunnel processes
-            killRSDTunnel(for: selectedDevice)
+            errorHandler.handle(AppError.noRouteToHost)
+            return
         }
 
-        alertText = message
-        showingAlert = true
-        simulationStatus = .idle
+        // Default path: surface the message without state reset.
+        // (Equivalent to AppError.processFailed with default classification.)
+        presentAlert(message: text)
         logger.warn("Alert: \(text)")
     }
 
