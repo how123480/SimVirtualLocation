@@ -17,7 +17,7 @@ import MapKit
 import MachO
 
 @MainActor
-class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocationManagerDelegate, MKLocalSearchCompleterDelegate {
+class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocationManagerDelegate, MKLocalSearchCompleterDelegate, ErrorHandlerHost {
 
     // MARK: - Enums
 
@@ -144,6 +144,7 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
     private let completer = MKLocalSearchCompleter()
     private let defaults: UserDefaults = UserDefaults.standard
     private let logger = AppLogger.shared
+    private lazy var errorHandler: ErrorHandler = ErrorHandler(host: self)
 
     private var isMapCentered = false
 
@@ -1185,6 +1186,38 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
             )
             if simulationStatus == .idle { simulationStatus = .mocking }
         }
+    }
+
+    // MARK: - ErrorHandlerHost
+
+    func resetAllState() {
+        deviceStatus = .idle
+        simulationStatus = .idle
+
+        mapView.mkMapView.removeOverlays(mapView.mkMapView.overlays)
+        mapView.mkMapView.removeAnnotations(mapView.mkMapView.annotations)
+        annotations = []
+        route = nil
+        tracks = []
+        currentPolyline = []
+
+        timer?.invalidate()
+        timer = nil
+        pendingSpeedRegenTask?.cancel()
+        pendingSpeedRegenTask = nil
+
+        Task {
+            await gpxPlayback.stop()
+            await runner.stopCurrentTask()
+        }
+
+        killRSDTunnel(for: selectedDevice)
+    }
+
+    func presentAlert(message: String) {
+        alertText = message
+        showingAlert = true
+        simulationStatus = .idle
     }
 }
 
