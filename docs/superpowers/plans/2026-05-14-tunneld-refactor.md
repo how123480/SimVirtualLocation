@@ -8,18 +8,19 @@
 
 **Tech Stack:** Swift 5 / SwiftUI macOS 11+ app, `Process` async wrapping (no `DispatchQueue`, no `print`), `pymobiledevice3 remote tunneld` daemon, `NSAppleScript ... with administrator privileges` for the one-time root launch.
 
-**Verification approach:** Project has no unit-test framework (per spec §3). Every behaviour-changing task ends with a `xcodebuild ... build CODE_SIGNING_ALLOWED=NO` and (where applicable) a regression-matrix entry from spec §11 walked through manually. Build command throughout:
+**Verification approach:** Project has no unit-test framework (per spec §3). Every behaviour-changing task ends with `swift build` and (where applicable) a regression-matrix entry from spec §11 walked through manually.
+
+**Build system note:** This project uses **Swift Package Manager** as its primary build system (`Package.swift` at repo root). `SimVirtualLocation.xcodeproj/project.pbxproj` is `.gitignore`d and regenerated on demand. SPM auto-discovers `.swift` files placed in `SimVirtualLocation/Logic/`, `SimVirtualLocation/Views/`, and `SimVirtualLocation/Models/`. **No pbxproj edits are required** when adding new files.
+
+Build command throughout:
 
 ```bash
-xcodebuild -project SimVirtualLocation.xcodeproj \
-  -scheme SimVirtualLocation \
-  -configuration Debug \
-  -destination 'platform=macOS' \
-  build \
-  CODE_SIGNING_ALLOWED=NO 2>&1 | tail -40
+swift build 2>&1 | tail -20
 ```
 
-Expected on success: `** BUILD SUCCEEDED **`.
+Expected on success: `Build complete!`.
+
+**Manual regression deferrals:** Steps that require a physical iOS device or Mac reboot (spec §11 scenarios 1, 2, 5, 6, 7, 9) cannot be performed by a CI/agent. Implementers should perform `swift build` verification and flag those scenarios as "deferred to final manual sweep (Task 19)" in their report. Scenarios 3, 4, 8, 10 (Stop button, A→B without device, Simulator path, speed slider) MAY be testable on a developer machine without iOS hardware — implementers should attempt these when possible.
 
 ---
 
@@ -180,34 +181,18 @@ extension AppError {
 }
 ```
 
-- [ ] **Step 2: Add file to Xcode project**
+- [ ] **Step 2: Build to verify**
 
 ```bash
-# Open the project and drag AppError.swift into the Logic group, or:
-# (Most reliable) Open SimVirtualLocation.xcodeproj in Xcode, right-click
-# Logic group → "Add Files to SimVirtualLocation…" → select AppError.swift.
+swift build 2>&1 | tail -20
 ```
 
-If the project uses a `project.pbxproj`-only setup without folder synchronization, the file must be referenced in `project.pbxproj`. Verify with:
+Expected: `Build complete!`.
+
+- [ ] **Step 3: Commit**
 
 ```bash
-grep -c "AppError.swift" SimVirtualLocation.xcodeproj/project.pbxproj
-```
-
-Expected: at least 2 references (one for the file, one for the build phase).
-
-- [ ] **Step 3: Build to verify**
-
-```bash
-xcodebuild -project SimVirtualLocation.xcodeproj -scheme SimVirtualLocation -configuration Debug -destination 'platform=macOS' build CODE_SIGNING_ALLOWED=NO 2>&1 | tail -40
-```
-
-Expected: `** BUILD SUCCEEDED **`.
-
-- [ ] **Step 4: Commit**
-
-```bash
-git add SimVirtualLocation/Logic/AppError.swift SimVirtualLocation.xcodeproj/project.pbxproj
+git add SimVirtualLocation/Logic/AppError.swift
 git commit -m "refactor(error): introduce AppError typed-error enum
 
 No behaviour change. Adds AppError + Context classifier so future
@@ -283,22 +268,20 @@ final class ErrorHandler {
 }
 ```
 
-- [ ] **Step 2: Reference file in pbxproj (same procedure as Task 1)**
-
-- [ ] **Step 3: Build to verify**
+- [ ] **Step 2: Build to verify**
 
 ```bash
-xcodebuild -project SimVirtualLocation.xcodeproj -scheme SimVirtualLocation -configuration Debug -destination 'platform=macOS' build CODE_SIGNING_ALLOWED=NO 2>&1 | tail -40
+swift build 2>&1 | tail -20
 ```
 
-Expected: `** BUILD SUCCEEDED **`.
+Expected: `Build complete!`.
 
 (The project will not yet implement `ErrorHandlerHost` — that's added in Task 3. As long as `ErrorHandler` itself compiles, this task is done.)
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 3: Commit**
 
 ```bash
-git add SimVirtualLocation/Logic/ErrorHandler.swift SimVirtualLocation.xcodeproj/project.pbxproj
+git add SimVirtualLocation/Logic/ErrorHandler.swift
 git commit -m "refactor(error): add ErrorHandler funnel
 
 Routes AppError through log + optional state reset + optional alert.
@@ -380,7 +363,7 @@ At the end of the class body (just before the final `}` on line 1189), add:
 
 - [ ] **Step 4: Build**
 
-Expected: `** BUILD SUCCEEDED **`.
+Expected: `Build complete!`.
 
 - [ ] **Step 5: Commit**
 
@@ -432,7 +415,7 @@ Behaviour equivalence vs. the old code:
 
 - [ ] **Step 2: Build**
 
-Expected: `** BUILD SUCCEEDED **`.
+Expected: `Build complete!`.
 
 - [ ] **Step 3: Manual regression — spec §11 scenario 9 (No route to host)**
 
@@ -657,22 +640,14 @@ struct ProcessRunner {
 }
 ```
 
-- [ ] **Step 3: Reference file in pbxproj**
+- [ ] **Step 3: Build**
+
+Expected: `Build complete!`.
+
+- [ ] **Step 4: Commit**
 
 ```bash
-grep -c "MobileDeviceClient.swift" SimVirtualLocation.xcodeproj/project.pbxproj
-```
-
-Expected: ≥ 2 after adding via Xcode UI.
-
-- [ ] **Step 4: Build**
-
-Expected: `** BUILD SUCCEEDED **`.
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add SimVirtualLocation/Logic/MobileDeviceClient.swift SimVirtualLocation.xcodeproj/project.pbxproj
+git add SimVirtualLocation/Logic/MobileDeviceClient.swift
 git commit -m "refactor(client): add MobileDeviceClient skeleton + ProcessRunner
 
 No call sites yet. Establishes Transport/TunneldStatus/MountResult types
@@ -728,7 +703,7 @@ Inside the `MobileDeviceClient` class body, before the closing brace, add:
 
 - [ ] **Step 2: Build**
 
-Expected: `** BUILD SUCCEEDED **`.
+Expected: `Build complete!`.
 
 - [ ] **Step 3: Commit**
 
@@ -770,7 +745,7 @@ Inside the `MobileDeviceClient` class, append after `revealDeveloperMode`:
 
 - [ ] **Step 2: Build**
 
-Expected: `** BUILD SUCCEEDED **`.
+Expected: `Build complete!`.
 
 - [ ] **Step 3: Commit**
 
@@ -932,7 +907,7 @@ with:
 
 - [ ] **Step 4: Build**
 
-Expected: `** BUILD SUCCEEDED **`.
+Expected: `Build complete!`.
 
 - [ ] **Step 5: Commit**
 
@@ -1086,7 +1061,7 @@ Find `private func stopLegacyDevice() async {` (line ~627). Replace body:
 
 - [ ] **Step 5: Build**
 
-Expected: `** BUILD SUCCEEDED **`.
+Expected: `Build complete!`.
 
 - [ ] **Step 6: Manual regression — spec §11 scenario 7 (iOS 16 device)**
 
@@ -1302,7 +1277,7 @@ import AppKit
 
 - [ ] **Step 3: Build**
 
-Expected: `** BUILD SUCCEEDED **`.
+Expected: `Build complete!`.
 
 - [ ] **Step 4: Commit**
 
@@ -1537,7 +1512,7 @@ Replace with:
 
 - [ ] **Step 5: Build**
 
-Expected: `** BUILD SUCCEEDED **`.
+Expected: `Build complete!`.
 
 If `Runner` references in `GPXPlayback` were the only reason `Runner.playGPXLegacy` / `Runner.playGPXRSD` existed, those will become dead code now — that's fine; Task 17 strips them.
 
@@ -1599,7 +1574,7 @@ Delete both.
 
 - [ ] **Step 3: Build**
 
-Expected: `** BUILD SUCCEEDED **`.
+Expected: `Build complete!`.
 
 If the build fails with "Cannot find 'RSDAddress' in scope" the remaining offender is the View layer; note the file path and confirm it'll be fixed by Task 16.
 
@@ -1672,7 +1647,7 @@ Update `isMockingActive`:
 
 - [ ] **Step 3: Build**
 
-Expected: `** BUILD SUCCEEDED **`.
+Expected: `Build complete!`.
 
 - [ ] **Step 4: Commit**
 
@@ -1809,7 +1784,7 @@ Replace with:
 
 - [ ] **Step 3: Build**
 
-Expected: `** BUILD SUCCEEDED **`. Any `error: expression is 'async' but is not marked with 'await'` is a missed call site — track it down with `grep -n stopSimulation`.
+Expected: `Build complete!`. Any `error: expression is 'async' but is not marked with 'await'` is a missed call site — track it down with `grep -n stopSimulation`.
 
 - [ ] **Step 4: Commit**
 
@@ -1920,7 +1895,7 @@ With:
 
 - [ ] **Step 4: Build**
 
-Expected: `** BUILD SUCCEEDED **`.
+Expected: `Build complete!`.
 
 - [ ] **Step 5: Manual regression — spec §11 scenarios 3, 4, 10**
 
@@ -1964,7 +1939,7 @@ If any TextField is wrapped inside a conditional `if locationController.useRSD {
 
 - [ ] **Step 3: Build**
 
-Expected: `** BUILD SUCCEEDED **`.
+Expected: `Build complete!`.
 
 If the build still complains about `RSDAddress`/`RSDPort` in another View file, repeat the same procedure there.
 
@@ -2033,7 +2008,7 @@ Expected: roughly 100–150 lines.
 
 - [ ] **Step 3: Build**
 
-Expected: `** BUILD SUCCEEDED **`.
+Expected: `Build complete!`.
 
 - [ ] **Step 4: Commit**
 
@@ -2129,11 +2104,11 @@ This is the verification gate. No code changes; we walk through every scenario f
 - [ ] **Step 1: Build a fresh Debug binary**
 
 ```bash
-xcodebuild clean -project SimVirtualLocation.xcodeproj -scheme SimVirtualLocation
-xcodebuild -project SimVirtualLocation.xcodeproj -scheme SimVirtualLocation -configuration Debug -destination 'platform=macOS' build CODE_SIGNING_ALLOWED=NO 2>&1 | tail -40
+swift package clean
+swift build 2>&1 | tail -20
 ```
 
-Expected: `** BUILD SUCCEEDED **`.
+Expected: `Build complete!`.
 
 - [ ] **Step 2: Reboot the Mac**
 
