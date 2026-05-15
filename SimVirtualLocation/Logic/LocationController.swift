@@ -138,6 +138,7 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
 
     private let mapView: MapView
     private let runner = Runner()
+    private let client = MobileDeviceClient()
     private lazy var gpxPlayback = GPXPlayback(runner: runner)
     private let currentSimulationAnnotation = MKPointAnnotation()
     private let locationManager = CLLocationManager()
@@ -602,18 +603,38 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
         }
         Task { @MainActor in
             self.deviceStatus = .checkingDeveloperMode
-            let isEnabled = await runner.checkDeveloperModeStatus(udid: selectedDevice)
-            if !isEnabled {
-                await runner.revealDeveloperMode(udid: selectedDevice)
+            do {
+                let enabled = try await client.checkDeveloperMode(udid: selectedDevice)
+                if !enabled {
+                    try? await client.revealDeveloperMode(udid: selectedDevice)
+                    self.deviceStatus = .idle
+                    showAlert(Constants.developerModeInstructions)
+                    return
+                }
+            } catch {
                 self.deviceStatus = .idle
-                showAlert(Constants.developerModeInstructions)
+                errorHandler.handle(error)
                 return
             }
+
             if useRSD {
-                startRSDTunnel()
+                startRSDTunnel()           // unchanged for now; replaced in Task 11
             } else {
-                mountDeveloperImage()
+                await mountDeveloperImageThroughClient()
             }
+        }
+    }
+
+    /// New helper used by both the iOS-16 legacy path and (later) anywhere that
+    /// needs an explicit mount step.
+    private func mountDeveloperImageThroughClient() async {
+        do {
+            self.deviceStatus = .mounting
+            _ = try await client.mountDeveloperImage(udid: selectedDevice)
+            self.deviceStatus = .connected
+        } catch {
+            self.deviceStatus = .idle
+            errorHandler.handle(error)
         }
     }
 
@@ -627,14 +648,11 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
 
     private func stopLegacyDevice() async {
         simulationStatus = .idle
-        await runner.stopCurrentTask()
-        await runner.resetIos(
-            udid: selectedDevice,
-            useRSD: false,
-            RSDAddress: "",
-            RSDPort: "",
-            showAlert: { [weak self] msg in self?.showAlert(msg) }
-        )
+        do {
+            try await client.clearLocation(transport: .legacy(udid: selectedDevice))
+        } catch {
+            errorHandler.handle(error)
+        }
 
         mapView.mkMapView.removeAnnotations(mapView.mkMapView.annotations)
         annotations = []
@@ -922,6 +940,13 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
         simulationStatus == .route || simulationStatus == .fromAToB
     }
 
+    /// The transport to use for the currently selected device.
+    /// Returns nil for non-iOS-device modes (Simulator / Android).
+    private func currentTransport() -> MobileDeviceClient.Transport? {
+        guard deviceType == 0, deviceMode == .device, !selectedDevice.isEmpty else { return nil }
+        return useRSD ? .rsd(udid: selectedDevice) : .legacy(udid: selectedDevice)
+    }
+
     /// Whether the current conditions allow for GPX path: iOS physical device + RSD/legacy both supported
     private var shouldUseGPXPlayback: Bool {
          deviceType == 0 && deviceMode == .device && isDeviceReady
@@ -1131,15 +1156,15 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
                     if simulationStatus == .idle { simulationStatus = .mocking }
                 }
             } else {
-                currentRunTask = Task {
-                    await runner.stopCurrentTask()
+                currentRunTask = Task { [weak self] in
                     if Task.isCancelled { return }
-                    try? await runner.runOnIos(
-                        location: location,
-                        udid: selectedDevice,
-                        showAlert: weakAlert
-                    )
-                    if simulationStatus == .idle { simulationStatus = .mocking }
+                    guard let self else { return }
+                    do {
+                        try await self.client.setLocation(location, transport: .legacy(udid: self.selectedDevice))
+                        if self.simulationStatus == .idle { self.simulationStatus = .mocking }
+                    } catch {
+                        self.errorHandler.handle(error)
+                    }
                 }
             }
             return
