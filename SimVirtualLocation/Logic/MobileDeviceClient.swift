@@ -40,6 +40,13 @@ final class MobileDeviceClient: ObservableObject {
             case .legacy(let u), .rsd(let u): return u
             }
         }
+
+        var label: String {
+            switch self {
+            case .legacy: return "legacy"
+            case .rsd:    return "rsd"
+            }
+        }
     }
 
     enum MountResult { case mounted, alreadyMounted }
@@ -110,6 +117,97 @@ final class MobileDeviceClient: ObservableObject {
             return .alreadyMounted
         }
         throw classified
+    }
+
+    // MARK: - Location commands
+
+    func setLocation(_ coord: CLLocationCoordinate2D, transport: Transport) async throws {
+        if case .rsd = transport {
+            try await ensureTunneldRunning()
+        }
+        let args = locationSetArgs(coord, transport: transport)
+        let result = try await processRunner.run(args: args)
+        try classifyResult(result, context: .setLocation)
+    }
+
+    func clearLocation(transport: Transport) async throws {
+        if case .rsd = transport {
+            try await ensureTunneldRunning()
+        }
+        let args = locationClearArgs(transport)
+        let result = try await processRunner.run(args: args)
+        try classifyResult(result, context: .clearLocation)
+    }
+
+    /// Plays GPX in the background. Returns a handle the caller stores.
+    /// Calling stop() on the handle SIGTERMs the underlying process.
+    func playGPX(_ url: URL, transport: Transport) async throws -> ProcessRunner.LongRunningHandle {
+        if case .rsd = transport {
+            try await ensureTunneldRunning()
+        }
+        // Stop any previously running long-running task first.
+        await currentLongRunning?.stop()
+        currentLongRunning = nil
+
+        let args = locationPlayArgs(url, transport: transport)
+        let handle = try processRunner.runDiscardingOutput(args: args)
+        currentLongRunning = handle
+        logger.info("Started GPX playback: \(url.lastPathComponent), transport=\(transport.label)")
+        return handle
+    }
+
+    // MARK: - Argument builders
+
+    private func locationSetArgs(_ c: CLLocationCoordinate2D, transport: Transport) -> [String] {
+        let lat = String(format: "%.5f", c.latitude)
+        let lng = String(format: "%.5f", c.longitude)
+        switch transport {
+        case .legacy(let udid):
+            return ["developer", "simulate-location", "set",
+                    "--udid", udid, "--", lat, lng]
+        case .rsd(let udid):
+            return ["developer", "dvt", "simulate-location", "set",
+                    "--udid", udid, "--", lat, lng]
+        }
+    }
+
+    private func locationClearArgs(_ transport: Transport) -> [String] {
+        switch transport {
+        case .legacy(let udid):
+            return ["developer", "simulate-location", "clear", "--udid", udid]
+        case .rsd(let udid):
+            return ["developer", "dvt", "simulate-location", "clear", "--udid", udid]
+        }
+    }
+
+    private func locationPlayArgs(_ url: URL, transport: Transport) -> [String] {
+        switch transport {
+        case .legacy(let udid):
+            return ["developer", "simulate-location", "play",
+                    "--udid", udid, url.path]
+        case .rsd(let udid):
+            return ["developer", "dvt", "simulate-location", "play",
+                    "--udid", udid, url.path]
+        }
+    }
+
+    private func classifyResult(_ result: ProcessRunner.ProcessResult,
+                                context: AppError.Context) throws {
+        // SIGTERM (15) is expected for our own teardown — not an error.
+        if result.exitCode == 0 || result.exitCode == 15 { return }
+        let classified = AppError.from(stderr: result.stderr, context: context)
+        if case .harmlessWarning = classified { return }
+        throw classified
+    }
+
+    // MARK: - Tunneld (full implementation in a later task)
+
+    func ensureTunneldRunning() async throws {
+        // Stub: full TunneldSupervisor lands in Task 10.
+        // Until then, .rsd transport callers will fail with .tunneldNotReady,
+        // which is exactly what we want — no live calls go through this path yet.
+        if case .ready = tunneldStatus { return }
+        throw AppError.tunneldNotReady
     }
 }
 
