@@ -93,6 +93,24 @@ final class MobileDeviceClient: ObservableObject {
         _ = try await processRunner.run(args: ["amfi", "reveal-developer-mode", "--udid", udid])
         // reveal-developer-mode is best-effort; ignore exit code.
     }
+
+    // MARK: - Mount Developer Image
+
+    func mountDeveloperImage(udid: String) async throws -> MountResult {
+        let result = try await processRunner.run(args: ["mounter", "auto-mount", "--udid", udid])
+
+        // pymobiledevice3 prints "already mounted" on stderr with non-zero exit;
+        // treat that as success.
+        if result.exitCode == 0 {
+            return .mounted
+        }
+        let classified = AppError.from(stderr: result.stderr, context: .mount)
+        if case .alreadyMounted = classified {
+            logger.info("Developer Image already mounted on device")
+            return .alreadyMounted
+        }
+        throw classified
+    }
 }
 
 // MARK: - ProcessRunner
