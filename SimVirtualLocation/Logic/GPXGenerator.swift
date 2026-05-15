@@ -161,79 +161,59 @@ enum GPXGenerator {
 @MainActor
 final class GPXPlayback {
 
-    /// Endpoint information, describing which iOS device to send the GPX to.
     enum Endpoint: Equatable {
         case legacy(udid: String)
-        case rsd(udid: String, address: String, port: String)
+        case rsd(udid: String)
     }
 
     // MARK: - Public
 
     private(set) var currentGPXURL: URL?
     private(set) var endpoint: Endpoint?
-
-    /// Whether a playback task is currently in progress
-    var isPlaying: Bool { task != nil }
+    var isPlaying: Bool { handle?.isRunning ?? false }
 
     // MARK: - Private
 
-    private let runner: Runner
+    private let client: MobileDeviceClient
     private let logger = AppLogger.shared
-    private var task: Task<Void, Never>?
+    private var handle: ProcessRunner.LongRunningHandle?
 
     // MARK: - Init
 
-    init(runner: Runner) {
-        self.runner = runner
+    init(client: MobileDeviceClient) {
+        self.client = client
     }
 
     // MARK: - Public Methods
 
-    /// Starts GPX playback (stops the previous one first).
-    /// - Parameters:
-    ///   - gpxURL: The GPX file to play
-    ///   - endpoint: legacy / rsd
-    ///   - alert: Closure to show alert if pymobiledevice3 fails to start
-    func start(
-        gpxURL: URL,
-        endpoint: Endpoint,
-        alert: @escaping (String) -> Void
-    ) async {
+    func start(gpxURL: URL,
+               endpoint: Endpoint,
+               alert: @escaping (String) -> Void) async {
         await stop()
 
         currentGPXURL = gpxURL
         self.endpoint = endpoint
         logger.info("Start GPX playback: \(gpxURL.lastPathComponent), endpoint=\(endpoint.label)")
 
-        let runner = self.runner
-        task = Task {
-            do {
-                switch endpoint {
-                case .legacy(let udid):
-                    try await runner.playGPXLegacy(udid: udid, gpxURL: gpxURL, showAlert: alert)
-                case .rsd(let udid, let addr, let port):
-                    try await runner.playGPXRSD(
-                        udid: udid,
-                        gpxURL: gpxURL,
-                        RSDAddress: addr,
-                        RSDPort: port,
-                        showAlert: alert
-                    )
-                }
-            } catch {
-                AppLogger.shared.warn("GPX playback ended with error: \(error.localizedDescription)")
-            }
+        let transport: MobileDeviceClient.Transport
+        switch endpoint {
+        case .legacy(let u): transport = .legacy(udid: u)
+        case .rsd(let u):    transport = .rsd(udid: u)
+        }
+
+        do {
+            handle = try await client.playGPX(gpxURL, transport: transport)
+        } catch {
+            alert((error as? AppError)?.userMessage ?? error.localizedDescription)
         }
     }
 
-    /// Stops current playback and clears state.
     func stop() async {
-        let previous = task
-        task = nil
+        let previous = handle
+        handle = nil
         currentGPXURL = nil
         endpoint = nil
-        previous?.cancel()
-        await runner.stopCurrentTask()
+        await previous?.stop()
     }
 }
 

@@ -139,7 +139,7 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
     private let mapView: MapView
     private let runner = Runner()
     private let client = MobileDeviceClient()
-    private lazy var gpxPlayback = GPXPlayback(runner: runner)
+    private lazy var gpxPlayback = GPXPlayback(client: client)
     private let currentSimulationAnnotation = MKPointAnnotation()
     private let locationManager = CLLocationManager()
     private let completer = MKLocalSearchCompleter()
@@ -618,7 +618,7 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
             }
 
             if useRSD {
-                startRSDTunnel()           // unchanged for now; replaced in Task 11
+                await connectViaTunneld()
             } else {
                 await mountDeveloperImageThroughClient()
             }
@@ -631,6 +631,17 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
         do {
             self.deviceStatus = .mounting
             _ = try await client.mountDeveloperImage(udid: selectedDevice)
+            self.deviceStatus = .connected
+        } catch {
+            self.deviceStatus = .idle
+            errorHandler.handle(error)
+        }
+    }
+
+    private func connectViaTunneld() async {
+        do {
+            self.deviceStatus = .waitingAuthorization
+            try await client.ensureTunneldRunning()
             self.deviceStatus = .connected
         } catch {
             self.deviceStatus = .idle
@@ -737,22 +748,17 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
 
     func stopRSDTunnel() async {
         simulationStatus = .idle
-        await runner.stopCurrentTask()
-        logger.info("Stopping RSD tunnel")
-
-        await runner.resetIos(
-            udid: selectedDevice,
-            useRSD: useRSD,
-            RSDAddress: RSDAddress,
-            RSDPort: RSDPort,
-            showAlert: { [weak self] msg in self?.showAlert(msg) }
-        )
+        do {
+            try await client.clearLocation(transport: .rsd(udid: selectedDevice))
+        } catch {
+            errorHandler.handle(error)
+        }
 
         mapView.mkMapView.removeAnnotations(mapView.mkMapView.annotations)
         annotations = []
         if let route { mapView.mkMapView.removeOverlay(route.polyline) }
         deviceStatus = .idle
-        killRSDTunnel(for: selectedDevice)
+        // tunneld stays alive across app launches.
     }
 
     private func killRSDTunnel(for udid: String) {
@@ -955,11 +961,7 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
     /// Based on current useRSD setting, returns GPXPlayback.Endpoint
     private func currentGPXEndpoint() -> GPXPlayback.Endpoint? {
         guard !selectedDevice.isEmpty else { return nil }
-        if useRSD {
-            guard !RSDAddress.isEmpty, !RSDPort.isEmpty else { return nil }
-            return .rsd(udid: selectedDevice, address: RSDAddress, port: RSDPort)
-        }
-        return .legacy(udid: selectedDevice)
+        return useRSD ? .rsd(udid: selectedDevice) : .legacy(udid: selectedDevice)
     }
 
     /// Called at the start of simulateRoute / simulateFromAToB:
@@ -1143,17 +1145,15 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
         // iOS Device
         if deviceMode == .device {
             if useRSD {
-                currentRunTask = Task {
-                    await runner.stopCurrentTask()
+                currentRunTask = Task { [weak self] in
                     if Task.isCancelled { return }
-                    try? await runner.runOnNewIos(
-                        location: location,
-                        udid: selectedDevice,
-                        RSDAddress: RSDAddress,
-                        RSDPort: RSDPort,
-                        showAlert: weakAlert
-                    )
-                    if simulationStatus == .idle { simulationStatus = .mocking }
+                    guard let self else { return }
+                    do {
+                        try await self.client.setLocation(location, transport: .rsd(udid: self.selectedDevice))
+                        if self.simulationStatus == .idle { self.simulationStatus = .mocking }
+                    } catch {
+                        self.errorHandler.handle(error)
+                    }
                 }
             } else {
                 currentRunTask = Task { [weak self] in
