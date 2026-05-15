@@ -146,30 +146,6 @@ class Runner {
         try await runLocationTask(task, label: "iOS legacy", showAlert: showAlert)
     }
 
-    // MARK: - iOS 17+ RSD Location
-
-    func runOnNewIos(
-        location: CLLocationCoordinate2D,
-        udid: String,
-        RSDAddress: String,
-        RSDPort: String,
-        showAlert: @escaping (String) -> Void
-    ) async throws {
-        guard !RSDAddress.isEmpty, !RSDPort.isEmpty else {
-            showAlert("RSD Address / Port not yet obtained")
-            return
-        }
-
-        let task = try await taskForIOS(args: [
-            "developer", "dvt", "simulate-location", "set",
-            "--rsd", RSDAddress, RSDPort,
-            "--",
-            "\(location.latitude)",
-            "\(location.longitude)",
-        ])
-        try await runLocationTask(task, label: "iOS RSD", showAlert: showAlert)
-    }
-
     /// Shared location command execution flow
     private func runLocationTask(
         _ task: Process,
@@ -228,26 +204,6 @@ class Runner {
             gpxURL.path,
         ])
         try await runLongRunningTask(task, label: "iOS legacy GPX play", showAlert: showAlert)
-    }
-
-    /// Plays GPX file via pymobiledevice3, suitable for iOS 17+ RSD mode.
-    func playGPXRSD(
-        udid: String,
-        gpxURL: URL,
-        RSDAddress: String,
-        RSDPort: String,
-        showAlert: @escaping (String) -> Void
-    ) async throws {
-        guard !RSDAddress.isEmpty, !RSDPort.isEmpty else {
-            showAlert("RSD Address / Port not yet obtained")
-            return
-        }
-        let task = try await taskForIOS(args: [
-            "developer", "dvt", "simulate-location", "play",
-            "--rsd", RSDAddress, RSDPort,
-            gpxURL.path,
-        ])
-        try await runLongRunningTask(task, label: "iOS RSD GPX play", showAlert: showAlert)
     }
 
     /// Execute long-running task and discard output to avoid pipe buffer deadlock.
@@ -344,43 +300,6 @@ class Runner {
     }
 
     // MARK: - Reset / Stop Location
-
-    func resetIos(
-        udid: String,
-        useRSD: Bool,
-        RSDAddress: String,
-        RSDPort: String,
-        showAlert: @escaping (String) -> Void
-    ) async {
-        await stopCurrentTask()
-
-        do {
-            let args: [String]
-            if useRSD && !RSDAddress.isEmpty && !RSDPort.isEmpty {
-                args = ["developer", "dvt", "simulate-location", "clear", "--rsd", RSDAddress, RSDPort]
-            } else {
-                args = ["developer", "simulate-location", "clear", "--udid", udid]
-            }
-
-            let task = try await taskForIOS(args: args)
-            let pipe = Pipe()
-            task.standardOutput = pipe
-            task.standardError = pipe
-
-            try task.run()
-            await waitExit(task)
-
-            let output = pipe.fileHandleForReading.readDataToEndOfFile()
-            if task.terminationStatus == 0 {
-                log.info("iOS mock location cleared")
-            } else {
-                let msg = String(decoding: output, as: UTF8.self)
-                log.warn("Failed to clear iOS mock location: \(msg)")
-            }
-        } catch {
-            log.error("Error clearing iOS mock location: \(error.localizedDescription)")
-        }
-    }
 
     func resetAndroid(adbDeviceId: String, adbPath: String, showAlert: (String) -> Void) {
         let task = taskForAndroid(args: [

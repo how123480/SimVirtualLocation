@@ -89,9 +89,6 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
     @Published var adbDeviceId: String = ""
     @Published var isEmulator: Bool = false
 
-    @Published var RSDAddress: String = ""
-    @Published var RSDPort: String = ""
-
     /// Device connection status (replaces original isDeviceActive + tunnelStatus strings)
     @Published var deviceStatus: DeviceStatus = .idle
 
@@ -671,81 +668,6 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
         deviceStatus = .idle
     }
 
-    func startRSDTunnel() {
-        let deviceId = selectedDevice
-        guard !deviceId.isEmpty else {
-            showAlert("Device not selected")
-            return
-        }
-        guard let pymobilePath = runner.getFullPathOf("pymobiledevice3") else {
-            showAlert("Could not find pymobiledevice3, please install it first")
-            return
-        }
-
-        deviceStatus = .waitingAuthorization
-
-        // Tunnel startup requires sudo authorization and must trigger a system prompt. Using background Task to execute AppleScript instead.
-        Task.detached(priority: .userInitiated) { [weak self] in
-            guard let self else { return }
-            let logPath = "/tmp/sim_rsd_\(deviceId).log"
-            try? "".write(toFile: logPath, atomically: true, encoding: .utf8)
-
-            // Trigger system authorization dialog via AppleScript
-            let scriptSource = "do shell script \"sh -c '\(pymobilePath) remote start-tunnel --udid \(deviceId) --protocol tcp > \(logPath) 2>&1 &'\" with administrator privileges"
-
-            let script = NSAppleScript(source: scriptSource)
-            var err: NSDictionary?
-            script?.executeAndReturnError(&err)
-
-            if let err {
-                let msg = err[NSAppleScript.errorMessage] as? String ?? "Unknown error"
-                await MainActor.run {
-                    AppLogger.shared.error("Authorization failed: \(msg)")
-                    self.deviceStatus = .idle
-                    if !msg.contains("User canceled") {
-                        self.showAlert("Authorization failed: \(msg)")
-                    }
-                }
-                return
-            }
-
-            await MainActor.run {
-                self.deviceStatus = .connecting
-                AppLogger.shared.info("Tunnel started in background, monitoring logs")
-                self.monitorRSDLog(at: logPath)
-            }
-        }
-    }
-
-    private func monitorRSDLog(at path: String) {
-        var attempts = 0
-        Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] timer in
-            attempts += 1
-            // Timer callback switch to main thread
-            Task { @MainActor in
-                guard let self, self.deviceStatus.isActive else {
-                    timer.invalidate()
-                    return
-                }
-                if let content = try? String(contentsOfFile: path, encoding: .utf8), !content.isEmpty {
-                    self.parseRSDOutput(content)
-                    if case .connected = self.deviceStatus {
-                        timer.invalidate()
-                        return
-                    }
-                }
-                if attempts >= 30 { // Approx. 45 seconds
-                    timer.invalidate()
-                    if case .connected = self.deviceStatus {} else {
-                        self.showAlert("Connection timed out, please check device connection")
-                        self.deviceStatus = .idle
-                        self.killRSDTunnel(for: self.selectedDevice)
-                    }
-                }
-            }
-        }
-    }
-
     func stopRSDTunnel() async {
         simulationStatus = .idle
         do {
@@ -761,11 +683,7 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
         // tunneld stays alive across app launches.
     }
 
-    private func killRSDTunnel(for udid: String) {
-        let script = "do shell script \"pkill -9 -f 'pymobiledevice3.*\(udid)'\" with administrator privileges"
-        NSAppleScript(source: script)?.executeAndReturnError(nil)
-        logger.info("Background tunnel processes cleared")
-    }
+
 
     // MARK: - Saved locations
 
@@ -858,23 +776,6 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
     }
 
     // MARK: - Private
-
-    private func parseRSDOutput(_ output: String) {
-        if let r = output.range(of: "RSD Address:\\s*([a-fA-F0-9:]+)", options: .regularExpression) {
-            let comps = output[r].components(separatedBy: CharacterSet.whitespaces)
-            if comps.count >= 2, let addr = comps.last, !addr.isEmpty, addr != RSDAddress {
-                RSDAddress = addr
-            }
-        }
-        if let r = output.range(of: "RSD Port:\\s*(\\d+)", options: .regularExpression) {
-            let comps = output[r].components(separatedBy: CharacterSet.whitespaces)
-            if comps.count >= 2, let port = comps.last, !port.isEmpty, port != RSDPort {
-                RSDPort = port
-                deviceStatus = .connected
-                showAlert("RSD tunnel connected!")
-            }
-        }
-    }
 
     private func loadLocations() {
         guard let data = defaults.data(forKey: Constants.defaultsSavedLocationsPathKey) else { return }
@@ -1210,8 +1111,6 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
             await gpxPlayback.stop()
             await runner.stopCurrentTask()
         }
-
-        killRSDTunnel(for: selectedDevice)
     }
 
     func presentAlert(message: String) {
