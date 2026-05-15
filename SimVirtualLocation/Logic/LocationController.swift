@@ -994,7 +994,6 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
         // Android
         if deviceType != 0 {
             currentRunTask = Task {
-                await runner.stopCurrentTask()
                 if Task.isCancelled { return }
                 guard ensureAdbAvailable() else { return }
                 logger.debug("Android location: deviceId=\(adbDeviceId), isEmulator=\(isEmulator)")
@@ -1045,7 +1044,6 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
             return
         }
         currentRunTask = Task {
-            await runner.stopCurrentTask()
             if Task.isCancelled { return }
             runner.runOnSimulator(
                 location: location,
@@ -1076,7 +1074,6 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
 
         Task {
             await gpxPlayback.stop()
-            await runner.stopCurrentTask()
         }
     }
 

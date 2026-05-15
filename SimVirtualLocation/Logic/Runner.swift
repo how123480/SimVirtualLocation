@@ -21,9 +21,6 @@ class Runner {
 
     // MARK: - Private Properties
 
-    /// Currently running location Process (used to terminate old commands before switching to new ones)
-    private var currentTask: Process?
-
     private let log = AppLogger.shared
 
     // MARK: - Utility Tools
@@ -33,31 +30,6 @@ class Runner {
         await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
             task.terminationHandler = { _ in cont.resume() }
         }
-    }
-
-    // MARK: - Terminate Current Command
-
-    func stopCurrentTask() async {
-        guard let task = currentTask, task.isRunning else { return }
-
-        log.debug("Terminating previous location command (PID: \(task.processIdentifier))")
-        task.terminate()
-
-        // Wait for process to end (max 2 seconds)
-        let start = Date()
-        while task.isRunning && Date().timeIntervalSince(start) < 2.0 {
-            try? await Task.sleep(nanoseconds: 50_000_000)
-        }
-
-        if task.isRunning {
-            log.warn("Old command (PID: \(task.processIdentifier)) did not end within time limit, sending SIGKILL")
-
-            // Short wait for SIGKILL to take effect
-            try? await Task.sleep(nanoseconds: 100_000_000)
-        } else {
-            log.debug("Old command has ended")
-        }
-        currentTask = nil
     }
 
     // MARK: - Simulator Location
