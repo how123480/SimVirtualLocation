@@ -560,56 +560,6 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
 
     // MARK: - Device lifecycle
 
-    func mountDeveloperImage() {
-        guard let device = connectedDevices.first(where: { $0.id == selectedDevice }) else {
-            showAlert("Device not selected")
-            return
-        }
-        Task { @MainActor in
-            self.deviceStatus = .mounting
-            do {
-                let mountTask = try await runner.taskForIOS(args: ["mounter", "auto-mount", "--udid", device.id])
-
-                let outPipe = Pipe()
-                let errPipe = Pipe()
-                mountTask.standardOutput = outPipe
-                mountTask.standardError = errPipe
-
-                try mountTask.run()
-                mountTask.waitUntilExit()
-
-                let outData = outPipe.fileHandleForReading.readDataToEndOfFile()
-                outPipe.fileHandleForReading.closeFile()
-
-                var isAlreadyMounted = false
-                if let errData = try? errPipe.fileHandleForReading.readToEnd(),
-                   let text = String(data: errData, encoding: .utf8), !text.isEmpty {
-                    if text.range(of: "already mounted", options: .caseInsensitive) != nil ||
-                       text.range(of: "Image is already mounted", options: .caseInsensitive) != nil {
-                        isAlreadyMounted = true
-                        logger.info("Developer Image already mounted on device")
-                    } else if text.contains("DeviceLocked") {
-                        showAlert("Error: Device is locked")
-                    } else {
-                        showAlert(text)
-                    }
-                }
-                if let text = String(data: outData, encoding: .utf8), !text.isEmpty {
-                    logger.debug(text)
-                }
-
-                if mountTask.terminationStatus == 0 || isAlreadyMounted {
-                    self.deviceStatus = .connected
-                } else {
-                    self.deviceStatus = .idle
-                }
-            } catch {
-                self.deviceStatus = .idle
-                showAlert(error.localizedDescription)
-            }
-        }
-    }
-
     func startDevice() {
         guard !selectedDevice.isEmpty else {
             showAlert("Device not selected")
@@ -1142,25 +1092,7 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
 private extension LocationController {
 
     func getConnectedDevices() async throws -> [Device] {
-        let task = try await runner.taskForIOS(args: ["--no-color", "usbmux", "list"])
-        let pipe = Pipe()
-        task.standardOutput = pipe
-        try task.run()
-        task.waitUntilExit()
-
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        pipe.fileHandleForReading.closeFile()
-
-        if task.terminationStatus != 0 {
-            throw SimulatorFetchError.simctlFailed
-        }
-        let devices = try JSONDecoder().decode([Device].self, from: data)
-
-        // The same device may appear repeatedly through USB and Network, deduplicate by UDID
-        var seen: Set<String> = []
-        let unique = devices.filter { seen.insert($0.id).inserted }
-        logger.info("Connected devices: \(unique.map { "\($0.name) (\($0.version))" }.joined(separator: ", "))")
-        return unique
+        return try await client.listDevices()
     }
 
     func getBootedSimulators() throws -> [Simulator] {
