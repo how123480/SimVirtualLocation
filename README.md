@@ -17,6 +17,7 @@ Easy to use MacOS 11+ application for easy mocking iOS device and simulator loca
 - **Joystick Navigation**: smoothly move around the map using keyboard arrow keys (with adjustable speed in Single Point mode).
 - **Unified Logging**: All actions are logged to a rotating file at `~/Library/Logs/SimVirtualLocation/app.log` (max 1MB × 5 backups), with personally identifiable information (home directory, UDID, IPv6 link-local) automatically redacted.
 - **Strongly-typed Status**: Device connection state (`DeviceStatus`) and simulation state (`SimulationStatus`) are modelled as enums, so the UI always shows a consistent localized label.
+- **One-time authorization for iOS 17+.** A background `pymobiledevice3 remote tunneld` daemon is launched on first connect (one admin password prompt); subsequent Start/Stop operations require no password. The daemon survives app restart and is reset only by Mac reboot.
 
 You can download compiled and signed app [here](https://skywalker-howardhoward.netlify.app/).
 
@@ -59,11 +60,15 @@ After installation:
 - If your iOS version is (for example) 16.5.1 and there is only 16.5 - it's ok, just copy and rename it to 16.5.1 and put it inside Xcode at `.../Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/DeviceSupport/`.
 
 **For iOS 17+ devices:**
-Select checkbox "iOS 17+" and provide RSD Address and RSD Port from command:
-```shell
-sudo pymobiledevice3 remote start-tunnel
-```
-This needs `sudo` because it will instantiate a low level connection between Mac and iPhone. Keep this command running while mocking location for iOS 17+.
+
+No manual configuration required.
+
+1. Connect the device and select it from the dropdown.
+2. Click **Connect Device**. The first time after a Mac reboot, macOS asks for your admin password. The app uses this to start `pymobiledevice3 remote tunneld` as a background root process. The daemon auto-discovers iOS 17+ devices and provides tunnel info to every subsequent command.
+3. Click **Start**. All subsequent Start/Stop operations require **no password**.
+4. The daemon stays alive across app launches. It is reset only on Mac reboot or if you kill it from Activity Monitor.
+
+> The app version derives the device's iOS version from `pymobiledevice3 usbmux list` and automatically routes commands through the legacy or tunneld code path. There is no manual "iOS 17+" toggle and no RSD Address / Port field to fill in.
 
 ### For Android Devices
 1. Check if debugging over USB is enabled.
@@ -125,6 +130,39 @@ tail -f ~/Library/Logs/SimVirtualLocation/app.log
 ```
 
 To copy the in-memory log buffer (last 500 entries) to the clipboard, click the **Logs** button in the side panel.
+
+## Troubleshooting
+
+### Why is the password prompt back?
+
+Expected when:
+- The Mac was rebooted (the `tunneld` daemon does not persist across reboots).
+- You killed `pymobiledevice3` from Activity Monitor.
+
+To force a re-prompt manually:
+
+```shell
+sudo pkill -f 'pymobiledevice3 remote tunneld'
+```
+
+The next click on **Connect Device** for an iOS 17+ device will prompt again.
+
+### Tunneld status check
+
+```shell
+ps aux | grep '[r]emote tunneld'
+curl -s http://127.0.0.1:49151/ | head
+```
+
+If `curl` returns empty or `Connection refused`, the daemon is not running.
+
+### Connect Device hangs at "Waiting for authorization…"
+
+Most likely `tunneld` started but cannot reach the device. Verify:
+
+1. `pymobiledevice3 usbmux list` lists the device.
+2. The device is unlocked.
+3. Developer Mode is enabled on the device.
 
 ## FAQ
 
