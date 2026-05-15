@@ -59,6 +59,40 @@ final class MobileDeviceClient: ObservableObject {
     // MARK: - Init
 
     init() {}
+
+    // MARK: - Device discovery
+
+    func listDevices() async throws -> [Device] {
+        let result = try await processRunner.run(args: ["--no-color", "usbmux", "list"])
+        if result.exitCode != 0 {
+            throw AppError.from(stderr: result.stderr, context: .listDevices)
+        }
+        let devices = try JSONDecoder().decode([Device].self, from: result.stdout)
+        var seen: Set<String> = []
+        let unique = devices.filter { seen.insert($0.id).inserted }
+        logger.info("Connected devices: \(unique.map { "\($0.name) (\($0.version))" }.joined(separator: ", "))")
+        return unique
+    }
+
+    // MARK: - Developer Mode
+
+    func checkDeveloperMode(udid: String) async throws -> Bool {
+        let result = try await processRunner.run(args: ["amfi", "developer-mode-status", "--udid", udid])
+        if result.exitCode != 0 {
+            throw AppError.from(stderr: result.stderr, context: .checkDeveloperMode)
+        }
+        let text = String(decoding: result.stdout, as: UTF8.self)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        logger.info("Developer Mode status: \(text)")
+        return text.contains("true")
+    }
+
+    func revealDeveloperMode(udid: String) async throws {
+        logger.info("Prompting device to open Developer Mode menu")
+        _ = try await processRunner.run(args: ["amfi", "reveal-developer-mode", "--udid", udid])
+        // reveal-developer-mode is best-effort; ignore exit code.
+    }
 }
 
 // MARK: - ProcessRunner
