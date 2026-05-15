@@ -28,64 +28,10 @@ class Runner {
 
     // MARK: - Utility Tools
 
-    /// Filter known harmless warnings (urllib3 / LibreSSL)
-    private func shouldSuppressError(_ error: String) -> Bool {
-        if error.contains("NotOpenSSLWarning") ||
-           error.contains("urllib3 v2 only supports OpenSSL") ||
-           error.contains("LibreSSL") {
-            return true
-        }
-        if error.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return true
-        }
-        return false
-    }
-
     /// Wait for Process to end (replaces blocking task.waitUntilExit())
     private func waitExit(_ task: Process) async {
         await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
             task.terminationHandler = { _ in cont.resume() }
-        }
-    }
-
-    // MARK: - Developer Mode
-
-    enum DeveloperModeStatus {
-        case enabled
-        case needsManual
-        case failed(String)
-    }
-
-    func checkDeveloperModeStatus(udid: String) async -> Bool {
-        do {
-            let task = try await taskForIOS(args: ["amfi", "developer-mode-status", "--udid", udid])
-            let outputPipe = Pipe()
-            task.standardOutput = outputPipe
-
-            try task.run()
-            await waitExit(task)
-
-            let data = outputPipe.fileHandleForReading.readDataToEndOfFile()
-            let output = String(decoding: data, as: UTF8.self)
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-                .lowercased()
-
-            log.info("Developer Mode status: \(output)")
-            return output.contains("true")
-        } catch {
-            log.error("Failed to check Developer Mode: \(error.localizedDescription)")
-            return false
-        }
-    }
-
-    func revealDeveloperMode(udid: String) async {
-        do {
-            let task = try await taskForIOS(args: ["amfi", "reveal-developer-mode", "--udid", udid])
-            log.info("Prompting device to open Developer Mode menu")
-            try task.run()
-            await waitExit(task)
-        } catch {
-            log.error("reveal-developer-mode failed: \(error.localizedDescription)")
         }
     }
 
@@ -105,7 +51,7 @@ class Runner {
 
         if task.isRunning {
             log.warn("Old command (PID: \(task.processIdentifier)) did not end within time limit, sending SIGKILL")
-            
+
             // Short wait for SIGKILL to take effect
             try? await Task.sleep(nanoseconds: 100_000_000)
         } else {
@@ -127,126 +73,6 @@ class Runner {
 
         log.info("Simulator location: lat=\(location.latitude), lng=\(location.longitude)")
         NotificationSender.postNotification(for: location, to: simulators)
-    }
-
-    // MARK: - iOS 16 and Below Location
-
-    func runOnIos(
-        location: CLLocationCoordinate2D,
-        udid: String,
-        showAlert: @escaping (String) -> Void
-    ) async throws {
-        let task = try await taskForIOS(args: [
-            "developer", "simulate-location", "set",
-            "--udid", udid,
-            "--",
-            String(format: "%.5f", location.latitude),
-            String(format: "%.5f", location.longitude),
-        ])
-        try await runLocationTask(task, label: "iOS legacy", showAlert: showAlert)
-    }
-
-    /// Shared location command execution flow
-    private func runLocationTask(
-        _ task: Process,
-        label: String,
-        showAlert: @escaping (String) -> Void
-    ) async throws {
-        log.debug("Executing \(label) location command: \(task.logDescription)")
-
-        currentTask = task
-
-        let outPipe = Pipe()
-        let errPipe = Pipe()
-        task.standardInput = Pipe()
-        task.standardOutput = outPipe
-        task.standardError = errPipe
-
-        do {
-            try task.run()
-            await waitExit(task)
-            currentTask = nil
-
-            // Termination signal (15 = SIGTERM) is expected, do not report as error
-            if task.terminationStatus != 0 && task.terminationStatus != 15 {
-                if let data = try errPipe.fileHandleForReading.readToEnd() {
-                    let err = String(decoding: data, as: UTF8.self)
-                    if !err.isEmpty && !shouldSuppressError(err) {
-                        showAlert(err)
-                        log.error("\(label) failed: \(err)")
-                    } else if !err.isEmpty {
-                        log.debug("Suppressing harmless warning: \(err.prefix(120))")
-                    }
-                }
-            } else if task.terminationStatus == 15 {
-                log.debug("Location command terminated (SIGTERM), skipping error output")
-            }
-        } catch {
-            currentTask = nil
-            showAlert(error.localizedDescription)
-            log.error("\(label) start failed: \(error.localizedDescription)")
-            throw error
-        }
-    }
-
-    // MARK: - iOS GPX Playback (long-running)
-
-    /// Plays GPX file via pymobiledevice3, suitable for iOS 16 and below.
-    /// This process will continue running until the GPX ends or it is terminated by SIGTERM.
-    func playGPXLegacy(
-        udid: String,
-        gpxURL: URL,
-        showAlert: @escaping (String) -> Void
-    ) async throws {
-        let task = try await taskForIOS(args: [
-            "developer", "simulate-location", "play",
-            "--udid", udid,
-            gpxURL.path,
-        ])
-        try await runLongRunningTask(task, label: "iOS legacy GPX play", showAlert: showAlert)
-    }
-
-    /// Execute long-running task and discard output to avoid pipe buffer deadlock.
-    /// For short-lived commands (set location), use runLocationTask() which captures errors.
-    /// For long-running commands (play GPX), use this to prevent pipe buffer from filling up.
-    private func runLongRunningTask(
-        _ task: Process,
-        label: String,
-        showAlert: @escaping (String) -> Void
-    ) async throws {
-        log.debug("Executing \(label) location command: \(task.logDescription)")
-
-        currentTask = task
-
-        // Redirect output to /dev/null to prevent pipe buffer deadlock
-        // (pymobiledevice3 play outputs continuously for hours, filling the 64KB pipe buffer)
-        let devNull = FileHandle.nullDevice
-        task.standardInput = FileHandle.nullDevice
-        task.standardOutput = devNull
-        task.standardError = devNull
-
-        do {
-            try task.run()
-            await waitExit(task)
-            currentTask = nil
-
-            // For long-running tasks, we can't capture detailed errors since output is discarded
-            // Only log non-zero exit status (except SIGTERM which is expected)
-            if task.terminationStatus != 0 && task.terminationStatus != 15 {
-                let msg = "\(label) exited with status \(task.terminationStatus)"
-                log.warn(msg)
-                showAlert(msg)
-            } else if task.terminationStatus == 15 {
-                log.debug("\(label) terminated (SIGTERM)")
-            } else {
-                log.debug("\(label) completed successfully")
-            }
-        } catch {
-            currentTask = nil
-            showAlert(error.localizedDescription)
-            log.error("\(label) start failed: \(error.localizedDescription)")
-            throw error
-        }
     }
 
     // MARK: - Android Location
