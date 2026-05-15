@@ -332,18 +332,20 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
         }
         let startPoint = annotations[0]
         let endPoint = annotations[1]
-        stopSimulation(clearAnnotations: false)
 
-        // Connect A and B with a straight line
-        let polyline = MKPolyline(coordinates: [startPoint.coordinate, endPoint.coordinate], count: 2)
-        mapView.mkMapView.addOverlay(polyline, level: .aboveRoads)
+        Task { @MainActor in
+            await stopSimulation(clearAnnotations: false)
 
-        tracks = [Track(startPoint: MKMapPoint(startPoint.coordinate), endPoint: MKMapPoint(endPoint.coordinate))]
-        currentPolyline = [startPoint.coordinate, endPoint.coordinate]
-        invalidateState()
-        simulationStatus = .fromAToB
-        startMovementTimer()
-        kickoffGPXPlaybackIfNeeded()
+            let polyline = MKPolyline(coordinates: [startPoint.coordinate, endPoint.coordinate], count: 2)
+            mapView.mkMapView.addOverlay(polyline, level: .aboveRoads)
+
+            tracks = [Track(startPoint: MKMapPoint(startPoint.coordinate), endPoint: MKMapPoint(endPoint.coordinate))]
+            currentPolyline = [startPoint.coordinate, endPoint.coordinate]
+            invalidateState()
+            simulationStatus = .fromAToB
+            startMovementTimer()
+            kickoffGPXPlaybackIfNeeded()
+        }
     }
 
     private func startMovementTimer() {
@@ -400,16 +402,30 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
 
     // MARK: Simulation control
 
-    func stopSimulation(clearAnnotations: Bool = true) {
-        simulationStatus = .idle
+    func stopSimulation(clearAnnotations: Bool = true) async {
+        // Idempotent: a second call while already stopping is a no-op.
+        guard simulationStatus.isMockingActive else { return }
+        simulationStatus = .stopping
+
         pendingSpeedRegenTask?.cancel()
         pendingSpeedRegenTask = nil
-        Task { await gpxPlayback.stop() }
-        Task { await runner.stopCurrentTask() }
         timer?.invalidate()
         timer = nil
 
-        // Clear route and overlays
+        await gpxPlayback.stop()
+
+        // Clear any in-flight per-tick location task.
+        currentRunTask?.cancel()
+        currentRunTask = nil
+
+        if let transport = currentTransport() {
+            do {
+                try await client.clearLocation(transport: transport)
+            } catch {
+                errorHandler.handle(error)
+            }
+        }
+
         mapView.mkMapView.removeOverlays(mapView.mkMapView.overlays)
         route = nil
         tracks = []
@@ -420,6 +436,7 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
             annotations = []
         }
         logger.info("Simulation stopped")
+        simulationStatus = .idle
     }
 
     // MARK: Search
@@ -799,7 +816,7 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
         guard simulationStatus.isMockingActive,
               !tracks.isEmpty,
               currentTrackIndex < tracks.count else {
-            stopSimulation(clearAnnotations: false)
+            Task { await stopSimulation(clearAnnotations: false) }
             printTimes()
             return
         }
@@ -973,7 +990,7 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
             return
         }
         if pointsMode == .single {
-            stopSimulation(clearAnnotations: false)
+            Task { await stopSimulation(clearAnnotations: false) }
             if annotations.count == 2, let second = annotations.last {
                 mapView.mkMapView.removeAnnotation(second)
                 if let route { mapView.mkMapView.removeOverlay(route.polyline) }

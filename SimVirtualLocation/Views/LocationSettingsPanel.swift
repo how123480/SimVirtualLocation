@@ -93,7 +93,7 @@ struct LocationSettingsPanel: View {
                         // Route simulation button (displays corresponding string based on SimulationStatus)
                         Button(action: {
                             if locationController.simulationStatus == .route {
-                                locationController.stopSimulation()
+                                Task { await locationController.stopSimulation() }
                             } else {
                                 locationController.makeRoute(autoSimulate: true)
                             }
@@ -105,7 +105,7 @@ struct LocationSettingsPanel: View {
 
                         Button(action: {
                             if locationController.simulationStatus == .fromAToB {
-                                locationController.stopSimulation()
+                                Task { await locationController.stopSimulation() }
                             } else {
                                 locationController.simulateFromAToB()
                             }
