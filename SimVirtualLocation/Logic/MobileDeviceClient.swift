@@ -15,6 +15,7 @@
 //
 
 import Foundation
+import AppKit
 import CoreLocation
 import Combine
 
@@ -200,14 +201,46 @@ final class MobileDeviceClient: ObservableObject {
         throw classified
     }
 
-    // MARK: - Tunneld (full implementation in a later task)
+    // MARK: - Tunneld lifecycle
+
+    private let tunneldHostURL = URL(string: "http://127.0.0.1:49151/")!
 
     func ensureTunneldRunning() async throws {
-        // Stub: full TunneldSupervisor lands in Task 10.
-        // Until then, .rsd transport callers will fail with .tunneldNotReady,
-        // which is exactly what we want — no live calls go through this path yet.
         if case .ready = tunneldStatus { return }
-        throw AppError.tunneldNotReady
+
+        if await TunneldSupervisor.isRunning() {
+            logger.info("tunneld already running, polling for HTTP readiness")
+            tunneldStatus = .launching
+            try await TunneldSupervisor.waitForReady(url: tunneldHostURL, timeout: 30.0)
+            tunneldStatus = .ready
+            logger.info("tunneld is ready")
+            return
+        }
+
+        // Need root authorization to launch.
+        tunneldStatus = .authorizing
+        do {
+            try await TunneldSupervisor.launchAsRoot()
+        } catch let err as AppError {
+            tunneldStatus = .failed(err.userMessage)
+            throw err
+        }
+
+        tunneldStatus = .launching
+        do {
+            try await TunneldSupervisor.waitForReady(url: tunneldHostURL, timeout: 30.0)
+        } catch {
+            tunneldStatus = .failed("Not ready within 30s")
+            throw AppError.tunneldNotReady
+        }
+        tunneldStatus = .ready
+        logger.info("tunneld launched and ready")
+    }
+
+    /// Manual-only. Not wired to any default UI affordance.
+    func killTunneld() async throws {
+        try await TunneldSupervisor.kill()
+        tunneldStatus = .idle
     }
 }
 
@@ -328,5 +361,117 @@ struct ProcessRunner {
         await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
             task.terminationHandler = { _ in cont.resume() }
         }
+    }
+}
+
+// MARK: - TunneldSupervisor
+
+/// Static utility around the `pymobiledevice3 remote tunneld` daemon.
+/// Lifecycle policy (per design spec §4):
+///  - Liveness: pgrep for `pymobiledevice3 remote tunneld`.
+///  - Readiness: HTTP GET 127.0.0.1:49151 returns 2xx.
+///  - Launch: NSAppleScript "do shell script ... with administrator privileges"
+///    runs the command as root in the background; survives the App quitting.
+///  - Kill: NSAppleScript with admin privileges (also prompts for password).
+enum TunneldSupervisor {
+
+    private static let logger = AppLogger.shared
+
+    static func isRunning() async -> Bool {
+        await withCheckedContinuation { cont in
+            DispatchQueue.global().async {
+                let task = Process()
+                task.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
+                task.arguments = ["-f", "pymobiledevice3 remote tunneld"]
+                let pipe = Pipe()
+                task.standardOutput = pipe
+                task.standardError = Pipe()
+                do {
+                    try task.run()
+                    task.waitUntilExit()
+                    let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                    let pids = String(data: data, encoding: .utf8) ?? ""
+                    cont.resume(returning: !pids.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                } catch {
+                    cont.resume(returning: false)
+                }
+            }
+        }
+    }
+
+    /// Polls `url` until it returns 2xx. Throws AppError.tunneldNotReady on timeout.
+    static func waitForReady(url: URL, timeout: TimeInterval) async throws {
+        let deadline = Date().addingTimeInterval(timeout)
+        let pollInterval: UInt64 = 500_000_000   // 500 ms
+
+        while Date() < deadline {
+            if await isReachable(url: url) { return }
+            try? await Task.sleep(nanoseconds: pollInterval)
+        }
+        throw AppError.tunneldNotReady
+    }
+
+    private static func isReachable(url: URL) async -> Bool {
+        var req = URLRequest(url: url)
+        req.timeoutInterval = 1.5
+        req.httpMethod = "GET"
+        do {
+            let (_, resp) = try await URLSession.shared.data(for: req)
+            if let http = resp as? HTTPURLResponse, (200..<300).contains(http.statusCode) {
+                return true
+            }
+        } catch {
+            // Connection refused / unreachable → not ready yet.
+        }
+        return false
+    }
+
+    /// Launches `pymobiledevice3 remote tunneld` as root in the background.
+    /// One osascript prompt fires here.
+    static func launchAsRoot() async throws {
+        guard let pmPath = findPymobiledevice3Path() else {
+            throw AppError.pymobiledevice3NotInstalled
+        }
+        // Background `&` so the AppleScript completes immediately; tunneld stays alive.
+        let shell = "\(pmPath) remote tunneld > /tmp/skywalker-tunneld.log 2>&1 &"
+        let script = "do shell script \"sh -c '\(shell)'\" with administrator privileges"
+
+        let appleScript = NSAppleScript(source: script)
+        var errorDict: NSDictionary?
+        _ = appleScript?.executeAndReturnError(&errorDict)
+
+        if let errorDict = errorDict {
+            let msg = (errorDict[NSAppleScript.errorMessage] as? String) ?? "Unknown error"
+            if msg.contains("User canceled") {
+                throw AppError.tunneldAuthorizationCancelled
+            }
+            throw AppError.tunneldAuthorizationFailed(msg)
+        }
+        logger.info("tunneld launched in background as root")
+    }
+
+    static func kill() async throws {
+        let script = "do shell script \"pkill -f 'pymobiledevice3 remote tunneld'\" with administrator privileges"
+        let appleScript = NSAppleScript(source: script)
+        var errorDict: NSDictionary?
+        _ = appleScript?.executeAndReturnError(&errorDict)
+        if let errorDict = errorDict {
+            let msg = (errorDict[NSAppleScript.errorMessage] as? String) ?? "Unknown error"
+            if msg.contains("User canceled") {
+                throw AppError.tunneldAuthorizationCancelled
+            }
+            throw AppError.tunneldAuthorizationFailed(msg)
+        }
+    }
+
+    // MARK: Helpers
+
+    private static func findPymobiledevice3Path() -> String? {
+        let common = [
+            "/Users/\(NSUserName())/.local/bin/pymobiledevice3",
+            "/opt/homebrew/bin/pymobiledevice3",
+            "/usr/local/bin/pymobiledevice3",
+        ]
+        return common.first { FileManager.default.isExecutableFile(atPath: $0) }
     }
 }
