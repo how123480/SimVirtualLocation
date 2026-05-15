@@ -263,16 +263,62 @@ struct ProcessRunner {
 
         var isRunning: Bool { task.isRunning }
 
+        // pymobiledevice3 is a Python wrapper that may spawn subprocesses
+        // (asyncio workers, tunnel I/O helpers). Signalling only the parent
+        // can leave the play loop running, so we walk the descendant tree.
         func stop() async {
             guard task.isRunning else { return }
+            let pid = task.processIdentifier
+
+            // Collect descendants BEFORE the parent dies — once it exits,
+            // children get reparented to launchd and pgrep -P can no longer find them.
+            let descendants = Self.collectDescendants(of: pid)
+
+            for child in descendants { kill(child, SIGTERM) }
             task.terminate()
+
             let start = Date()
-            while task.isRunning && Date().timeIntervalSince(start) < 2.0 {
+            while task.isRunning && Date().timeIntervalSince(start) < 1.0 {
                 try? await Task.sleep(nanoseconds: 50_000_000)
             }
+
             if task.isRunning {
-                kill(task.processIdentifier, SIGKILL)
-                try? await Task.sleep(nanoseconds: 100_000_000)
+                kill(pid, SIGKILL)
+            }
+            // SIGKILL anything that didn't honour SIGTERM (or that survived
+            // because its parent died first and it got reparented).
+            for child in descendants { kill(child, SIGKILL) }
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+
+        private static func collectDescendants(of pid: pid_t) -> [pid_t] {
+            var result: [pid_t] = []
+            var stack: [pid_t] = [pid]
+            while let current = stack.popLast() {
+                let children = directChildren(of: current)
+                result.append(contentsOf: children)
+                stack.append(contentsOf: children)
+            }
+            return result
+        }
+
+        private static func directChildren(of pid: pid_t) -> [pid_t] {
+            let probe = Process()
+            probe.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
+            probe.arguments = ["-P", "\(pid)"]
+            let pipe = Pipe()
+            probe.standardOutput = pipe
+            probe.standardError = Pipe()
+            do {
+                try probe.run()
+                probe.waitUntilExit()
+                let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                guard let text = String(data: data, encoding: .utf8) else { return [] }
+                return text.split(separator: "\n").compactMap {
+                    pid_t($0.trimmingCharacters(in: .whitespaces))
+                }
+            } catch {
+                return []
             }
         }
     }
