@@ -98,10 +98,20 @@ struct LocationSettingsPanel: View {
                                 locationController.makeRoute(autoSimulate: true)
                             }
                         }, label: {
-                            Text(locationController.simulationStatus == .route ? "Stop Simulation" : "Simulate Route")
-                                .frame(maxWidth: .infinity)
+                            HStack(spacing: 4) {
+                                if locationController.simulationStatus == .stopping {
+                                    ProgressView().controlSize(.small)
+                                    Text("Stopping…")
+                                } else if locationController.simulationStatus == .route {
+                                    Text("Stop Simulation")
+                                } else {
+                                    Text("Simulate Route")
+                                }
+                            }
+                            .frame(maxWidth: .infinity)
                         })
-                        .disabled(locationController.simulationStatus == .fromAToB)
+                        .disabled(locationController.simulationStatus == .fromAToB
+                                  || locationController.simulationStatus == .stopping)
 
                         Button(action: {
                             if locationController.simulationStatus == .fromAToB {
@@ -110,10 +120,20 @@ struct LocationSettingsPanel: View {
                                 locationController.simulateFromAToB()
                             }
                         }, label: {
-                            Text(locationController.simulationStatus == .fromAToB ? "Stop A→B Simulation" : "A→B Linear Simulation")
-                                .frame(maxWidth: .infinity)
+                            HStack(spacing: 4) {
+                                if locationController.simulationStatus == .stopping {
+                                    ProgressView().controlSize(.small)
+                                    Text("Stopping…")
+                                } else if locationController.simulationStatus == .fromAToB {
+                                    Text("Stop A→B Simulation")
+                                } else {
+                                    Text("A→B Linear Simulation")
+                                }
+                            }
+                            .frame(maxWidth: .infinity)
                         })
-                        .disabled(locationController.simulationStatus == .route)
+                        .disabled(locationController.simulationStatus == .route
+                                  || locationController.simulationStatus == .stopping)
                     }
                 }
 
