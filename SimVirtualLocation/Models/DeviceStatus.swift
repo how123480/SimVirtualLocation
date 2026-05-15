@@ -54,6 +54,7 @@ enum SimulationStatus: Equatable {
     case route     // Simulating along route
     case fromAToB  // Simulating straight line from A to B
     case mocking   // Fixed single point (location sent to device)
+    case stopping  // Async teardown in progress; button is greyed out
 
     var displayText: String {
         switch self {
@@ -61,6 +62,7 @@ enum SimulationStatus: Equatable {
         case .route:    return "Stop route simulation"
         case .fromAToB: return "Stop A→B simulation"
         case .mocking:  return "Mocking"
+        case .stopping: return "Stopping…"
         }
     }
 
@@ -70,11 +72,17 @@ enum SimulationStatus: Equatable {
         case .idle, .mocking: return "Simulate Route"
         case .route:          return "Stop Simulation"
         case .fromAToB:       return "Stop A→B Simulation"
+        case .stopping:       return "Stopping…"
         }
     }
 
-    /// Whether location is being continuously changed (Route, A->B, and Single Point are all considered active)
+    /// Whether location is being continuously changed.
+    /// .stopping is NOT mocking-active — this is what makes the idempotent
+    /// guard in stopSimulation() work (a second call early-returns).
     var isMockingActive: Bool {
-        return self != .idle
+        switch self {
+        case .route, .fromAToB, .mocking: return true
+        case .idle, .stopping:            return false
+        }
     }
 }
