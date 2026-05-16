@@ -2,39 +2,40 @@
 //  AndroidDeviceSettings.swift
 //  SimVirtualLocation
 //
-//  Created by Sergey Shirnin on 18.04.2022.
-//
 
 import SwiftUI
 
 struct AndroidDeviceSettings: View {
     @EnvironmentObject var locationController: LocationController
-    
+
     var body: some View {
-        GroupBox {
-            TextField("ADB path", text: $locationController.adbPath)
-            TextField("Device ID", text: $locationController.adbDeviceId)
-            Toggle("Is emulator", isOn: $locationController.isEmulator)
-            
-            if (locationController.isEmulator) {
-                Button(action: {
+        VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 6) {
+                PanelSectionLabel(text: "ADB")
+                TextField("/usr/local/bin/adb", text: $locationController.adbPath)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.callout)
+                TextField("Device ID", text: $locationController.adbDeviceId)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.callout)
+            }
+
+            Toggle("Emulator", isOn: $locationController.isEmulator)
+                .toggleStyle(.switch)
+                .font(.callout)
+                .foregroundColor(PanelTheme.textPrimary)
+
+            PanelButton(
+                title: locationController.isEmulator ? "Prepare Emulator" : "Install Helper App",
+                style: .prominent
+            ) {
+                if locationController.isEmulator {
                     locationController.prepareEmulator()
-                }, label: {
-                    Text("Prepare emulator").frame(maxWidth: .infinity)
-                })
-            } else {
-                Button(action: {
+                } else {
                     locationController.installHelperApp()
-                }, label: {
-                    Text("Install Helper App").frame(maxWidth: .infinity)
-                })
+                }
             }
         }
-    }
-}
-
-struct AndroidDeviceSettings_Previews: PreviewProvider {
-    static var previews: some View {
-        AndroidDeviceSettings()
+        .padding(.vertical, 14)
     }
 }

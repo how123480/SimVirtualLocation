@@ -13,14 +13,12 @@ struct LocationSettingsPanel: View {
 
     // MARK: - Derived state
 
-    /// Dims/disables the whole section when iOS device isn't connected yet.
     private var shouldDisableControls: Bool {
         locationController.deviceType == 0 &&
         locationController.deviceMode == .device &&
         !locationController.deviceStatus.isReady
     }
 
-    /// iOS physical device connected → pymobiledevice3 drives playback; no interval picker.
     private var isGPXPath: Bool {
         locationController.deviceType == 0 &&
         locationController.deviceMode == .device &&
@@ -40,13 +38,11 @@ struct LocationSettingsPanel: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // ── Mode selector ──────────────────────────────────────────────
             modePicker
                 .padding(.vertical, 14)
 
             PanelDivider()
 
-            // ── Mode controls ──────────────────────────────────────────────
             Group {
                 if locationController.pointsMode == .single {
                     singlePointSection
@@ -60,11 +56,12 @@ struct LocationSettingsPanel: View {
 
             PanelDivider()
 
-            // ── Saved locations ────────────────────────────────────────────
             LocationsView()
                 .environmentObject(locationController)
-                .padding(.top, 6)
+                .padding(.vertical, 14)
+                .frame(maxHeight: .infinity)
         }
+        .animation(.easeInOut(duration: 0.25), value: locationController.simulationStatus)
     }
 
     // MARK: - Mode picker
@@ -82,18 +79,11 @@ struct LocationSettingsPanel: View {
 
     private var singlePointSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            // Primary location actions (full width)
-            PanelActionButton(
-                title: "Set to Current Location",
-                icon: "location.fill"
-            ) {
+            PanelButton(title: "Set to Current Location") {
                 locationController.setCurrentLocation()
             }
 
-            PanelActionButton(
-                title: "Enter Coordinates…",
-                icon: "plus.viewfinder"
-            ) {
+            PanelButton(title: "Enter Coordinates") {
                 latitudeLongitude = ""
                 locationController.isShowingDialog = true
             }
@@ -105,31 +95,71 @@ struct LocationSettingsPanel: View {
                 Button("Cancel", role: .cancel) {}
             }
 
-            Divider().padding(.vertical, 2)
-
-            // Secondary row (half width each)
             HStack(spacing: 8) {
-                PanelActionButton(title: "Apply to A", icon: "scope") {
-                    locationController.setSelectedLocation()
-                }
-                PanelActionButton(title: "Save Point A", icon: "bookmark.fill") {
-                    locationController.savePointA()
-                }
+                startStopSimulateButton
+                saveIconButton
             }
 
             if isRouteActive {
-                Label("Map locked during route simulation", systemImage: "lock.fill")
+                Text("Map locked during route simulation")
                     .font(.caption)
-                    .foregroundColor(.secondary)
+                    .foregroundColor(PanelTheme.textSecondary)
                     .padding(.top, 2)
             }
         }
+    }
+
+    private var saveIconButton: some View {
+        Button {
+            locationController.savePointA()
+        } label: {
+            Image(systemName: "square.and.arrow.down")
+                .font(.system(size: 13, weight: .medium))
+                .foregroundColor(PanelTheme.textPrimary)
+                .frame(width: 30, height: 26)
+                .background(PanelTheme.buttonFill)
+                .clipShape(RoundedRectangle(cornerRadius: PanelTheme.radius, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: PanelTheme.radius, style: .continuous)
+                        .stroke(PanelTheme.separator, lineWidth: 0.5)
+                )
+        }
+        .buttonStyle(.plain)
+        .help("Save Point A")
+    }
+
+    // MARK: - Single-point start/stop
+
+    private var startStopSimulateButton: some View {
+        let isActive = locationController.simulationStatus == .mocking
+        let stopping = isStopping && isActive
+        let label = stopping ? "Stopping…" : isActive ? "Stop Mocking A" : "Apply to A"
+        let style: PanelButton.Style = isActive ? .destructive : .prominent
+        let action: () -> Void = isActive
+            ? { Task { await locationController.stopSimulation(clearAnnotations: false) } }
+            : { locationController.setSelectedLocation() }
+        let disabled = stopping || (isRouteActive && !isActive)
+        return PanelButton(
+            title: label,
+            style: style,
+            isLoading: stopping,
+            disabled: disabled,
+            action: action
+        )
     }
 
     // MARK: - Route section
 
     private var routeSection: some View {
         VStack(alignment: .leading, spacing: 12) {
+            // Action buttons on top
+            VStack(spacing: 6) {
+                simulateRouteButton
+                atoBButton
+            }
+
+            Divider()
+
             // Speed slider
             VStack(alignment: .leading, spacing: 4) {
                 HStack {
@@ -137,7 +167,7 @@ struct LocationSettingsPanel: View {
                     Spacer()
                     Text("\(Int(locationController.speed.rounded(.up))) km/h")
                         .font(.callout)
-                        .foregroundColor(.secondary)
+                        .foregroundColor(PanelTheme.textSecondary)
                         .monospacedDigit()
                 }
                 Slider(value: $locationController.speed, in: 5...200, step: 5)
@@ -146,9 +176,9 @@ struct LocationSettingsPanel: View {
 
             // Update interval (or GPX note)
             if isGPXPath {
-                Label("GPX playback — speed updates live without restarting", systemImage: "waveform.path")
+                Text("GPX playback — speed updates live without restarting")
                     .font(.caption)
-                    .foregroundColor(.secondary)
+                    .foregroundColor(PanelTheme.textSecondary)
             } else {
                 VStack(alignment: .leading, spacing: 4) {
                     PanelSectionLabel(text: "Update Interval")
@@ -172,90 +202,44 @@ struct LocationSettingsPanel: View {
                     }
                 }
             }
-
-            Divider()
-
-            // Simulation action buttons
-            VStack(spacing: 6) {
-                simulateRouteButton
-                atoBButton
-            }
         }
     }
 
     // MARK: - Route action buttons
 
-    @ViewBuilder
     private var simulateRouteButton: some View {
         let isActive = locationController.simulationStatus == .route
-        let label = isStopping ? "Stopping…" : isActive ? "Stop Route" : "Simulate Route"
-        let icon  = isActive ? "stop.fill" : "play.fill"
-
-        if isActive {
-            Button { Task { await locationController.stopSimulation() } } label: {
-                routeButtonLabel(text: label, icon: icon)
-            }
-            .buttonStyle(.bordered)
-            .tint(.red)
-            .disabled(isStopping)
-        } else {
-            Button { locationController.makeRoute(autoSimulate: true) } label: {
-                routeButtonLabel(text: label, icon: icon)
-            }
-            .buttonStyle(.borderedProminent)
-            .disabled(locationController.simulationStatus == .fromAToB || isStopping)
-        }
+        let stopping = isStopping && isActive
+        let label = stopping ? "Stopping…" : isActive ? "Stop Route" : "Simulate Route"
+        let style: PanelButton.Style = isActive ? .destructive : .prominent
+        let action: () -> Void = isActive
+            ? { Task { await locationController.stopSimulation() } }
+            : { locationController.makeRoute(autoSimulate: true) }
+        let disabled = (locationController.simulationStatus == .fromAToB && !isActive) || stopping
+        return PanelButton(
+            title: label,
+            style: style,
+            isLoading: stopping,
+            disabled: disabled,
+            action: action
+        )
     }
 
-    @ViewBuilder
     private var atoBButton: some View {
         let isActive = locationController.simulationStatus == .fromAToB
-        let label = isStopping ? "Stopping…" : isActive ? "Stop A→B" : "A→B Linear"
-        let icon  = isActive ? "stop.fill" : "arrow.forward.circle.fill"
-
-        if isActive {
-            Button { Task { await locationController.stopSimulation() } } label: {
-                routeButtonLabel(text: label, icon: icon)
-            }
-            .buttonStyle(.bordered)
-            .tint(.red)
-            .disabled(isStopping)
-        } else {
-            Button { locationController.simulateFromAToB() } label: {
-                routeButtonLabel(text: label, icon: icon)
-            }
-            .buttonStyle(.bordered)
-            .disabled(locationController.simulationStatus == .route || isStopping)
-        }
-    }
-
-    private func routeButtonLabel(text: String, icon: String) -> some View {
-        HStack(spacing: 6) {
-            if isStopping {
-                ProgressView().controlSize(.small)
-            } else {
-                Image(systemName: icon)
-            }
-            Text(text)
-        }
-        .frame(maxWidth: .infinity)
+        let stopping = isStopping && isActive
+        let label = stopping ? "Stopping…" : isActive ? "Stop A→B" : "A→B Linear"
+        let style: PanelButton.Style = isActive ? .destructive : .prominent
+        let action: () -> Void = isActive
+            ? { Task { await locationController.stopSimulation() } }
+            : { locationController.simulateFromAToB() }
+        let disabled = (locationController.simulationStatus == .route && !isActive) || stopping
+        return PanelButton(
+            title: label,
+            style: style,
+            isLoading: stopping,
+            disabled: disabled,
+            action: action
+        )
     }
 }
-
-// MARK: - Shared button component
-
-/// Full-width bordered action button used throughout the panel.
-private struct PanelActionButton: View {
-    let title: String
-    let icon: String
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            Label(title, systemImage: icon)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .buttonStyle(.bordered)
-    }
-}
-

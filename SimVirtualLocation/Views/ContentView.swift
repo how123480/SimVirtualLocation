@@ -17,6 +17,11 @@ struct ContentView: View {
     @State private var eventMonitor: Any?
     @FocusState private var isSearchFocused: Bool
 
+    /// Horizontal space the open side panel occupies (inner width + horizontal
+    /// padding around the panel + trailing window inset). Kept in one place so
+    /// the map centering math and the zoom-buttons offset stay in sync.
+    private let sidePanelTotalWidth: CGFloat = 360
+
     var body: some View {
         VStack {
             ZStack(alignment: .topLeading) {
@@ -32,8 +37,8 @@ struct ContentView: View {
                                         ForEach(locationController.logs.reversed()) { log in
                                             // Unified format: [time] [level] [file:line] message
                                             Text("[\(locationController.dateFormatter.string(from: log.date))] [\(log.level.label)] [\(log.location)] \(log.message)")
-                                                .font(.system(size: 12, design: .monospaced))
-                                                .foregroundColor(.white)
+                                                .font(.system(size: 11, design: .monospaced))
+                                                .foregroundColor(.primary)
                                                 .id(log.id)
                                         }
                                     }
@@ -42,8 +47,13 @@ struct ContentView: View {
                                 }
                                 .frame(width: 400)
                                 .frame(maxHeight: 250)
-                                .background(Color.black.opacity(0.5))
-                                .cornerRadius(8)
+                                .background(.ultraThinMaterial)
+                                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                        .stroke(Color(NSColor.separatorColor).opacity(0.5), lineWidth: 0.5)
+                                )
+                                .shadow(color: Color.black.opacity(0.1), radius: 4, x: 0, y: 1)
                                 .padding()
                                 .onChange(of: locationController.logs.count) { _ in
                                     if let lastId = locationController.logs.first?.id {
@@ -62,63 +72,62 @@ struct ContentView: View {
                     }
                     
                     // Map zoom buttons
-                    VStack {
-                        Image(systemName: "plus")
-                            .foregroundColor(Color.white)
-                            .frame(width: 32, height: 32)
-                            .background(Color.secondary)
-                            .opacity(0.5)
-                            .cornerRadius(16)
-                            .onTapGesture {
-                                var region: MKCoordinateRegion = mapView.mkMapView.region
-                                region.span.latitudeDelta /= 2.0
-                                region.span.longitudeDelta /= 2.0
-                                mapView.mkMapView.setRegion(region, animated: true)
-                            }
-                        Image(systemName: "minus")
-                            .foregroundColor(Color.white)
-                            .frame(width: 32, height: 32)
-                            .background(Color.secondary)
-                            .opacity(0.5)
-                            .cornerRadius(16)
-                            .onTapGesture {
-                                var region: MKCoordinateRegion = mapView.mkMapView.region
-                                region.span.latitudeDelta *= 2.0
-                                region.span.longitudeDelta *= 2.0
-                                mapView.mkMapView.setRegion(region, animated: true)
-                            }
-                        Image(systemName: "location")
-                            .foregroundColor(Color.white)
-                            .frame(width: 32, height: 32)
-                            .background(Color.secondary)
-                            .opacity(0.5)
-                            .cornerRadius(16)
-                            .onTapGesture {
-                                locationController.updateMapRegion(force: true)
-                            }
+                    VStack(spacing: 0) {
+                        MapControlButton(icon: "plus") {
+                            var region: MKCoordinateRegion = mapView.mkMapView.region
+                            region.span.latitudeDelta /= 2.0
+                            region.span.longitudeDelta /= 2.0
+                            mapView.mkMapView.setRegion(region, animated: true)
+                        }
+                        Divider().frame(width: 28)
+                        MapControlButton(icon: "minus") {
+                            var region: MKCoordinateRegion = mapView.mkMapView.region
+                            region.span.latitudeDelta *= 2.0
+                            region.span.longitudeDelta *= 2.0
+                            mapView.mkMapView.setRegion(region, animated: true)
+                        }
+                        Divider().frame(width: 28)
+                        MapControlButton(icon: "location") {
+                            locationController.updateMapRegion(force: true)
+                        }
                     }
+                    .background(.regularMaterial)
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .stroke(Color(NSColor.separatorColor).opacity(0.5), lineWidth: 0.5)
+                    )
+                    .shadow(color: Color.black.opacity(0.1), radius: 4, x: 0, y: 1)
                     .padding()
                     .padding(.bottom, 20)
-                    .padding(.trailing, showSidePanel ? 360 : 0) 
+                    .padding(.trailing, showSidePanel ? sidePanelTotalWidth : 0)
                     .animation(.spring(), value: showSidePanel)
                 }
 
                 // Search bar (top left)
                 VStack(alignment: .leading, spacing: 0) {
-                    HStack {
+                    HStack(spacing: 6) {
                         Image(systemName: "magnifyingglass")
-                            .foregroundColor(.gray)
-                            .padding(.leading, 12)
-                        TextField("Search location...", text: $locationController.searchQuery)
+                            .foregroundColor(.secondary)
+                            .font(.callout)
+                            .padding(.leading, 10)
+                        TextField("Search location", text: $locationController.searchQuery)
                             .focused($isSearchFocused)
                             .textFieldStyle(PlainTextFieldStyle())
-                            .padding(8)
+                            .font(.callout)
+                            .padding(.vertical, 7)
+                            .padding(.trailing, 10)
                             .onSubmit {
                                 locationController.performFullSearch()
                             }
                     }
-                    .background(Color(NSColor.windowBackgroundColor).opacity(0.9))
-                    .cornerRadius(8)
+                    .background(.regularMaterial)
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .stroke(Color(NSColor.separatorColor).opacity(0.5), lineWidth: 0.5)
+                    )
+                    .shadow(color: Color.black.opacity(0.08), radius: 4, x: 0, y: 1)
                     .padding()
 
                     if (!locationController.searchResults.isEmpty || !locationController.fullSearchResults.isEmpty) && !locationController.searchQuery.isEmpty {
@@ -186,8 +195,13 @@ struct ContentView: View {
                             }
                         }
                         .frame(maxHeight: 300)
-                        .background(Color(NSColor.windowBackgroundColor).opacity(0.9))
-                        .cornerRadius(8)
+                        .background(.regularMaterial)
+                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .stroke(Color(NSColor.separatorColor).opacity(0.5), lineWidth: 0.5)
+                        )
+                        .shadow(color: Color.black.opacity(0.08), radius: 4, x: 0, y: 1)
                         .padding(.horizontal)
                     }
                 }
@@ -198,15 +212,19 @@ struct ContentView: View {
                     Spacer()
                         .allowsHitTesting(false) // Allow clicks to pass through Spacer to map and buttons
                     
-                    // Toggle button (handle) - widened and beautified
+                    // Toggle button (handle)
                     ZStack {
-                        RoundedRectangle(cornerRadius: 12)
-                            .fill(.ultraThinMaterial)
-                            .frame(width: 28, height: 80)
-                            .shadow(radius: 5)
-                        
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .fill(.regularMaterial)
+                            .frame(width: 24, height: 60)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                    .stroke(Color(NSColor.separatorColor).opacity(0.5), lineWidth: 0.5)
+                            )
+                            .shadow(color: Color.black.opacity(0.08), radius: 4, x: -1, y: 1)
+
                         Image(systemName: showSidePanel ? "chevron.right" : "chevron.left")
-                            .font(.system(size: 14, weight: .bold))
+                            .font(.system(size: 11, weight: .semibold))
                             .foregroundColor(.secondary)
                     }
                     .contentShape(Rectangle())
@@ -215,32 +233,39 @@ struct ContentView: View {
                             showSidePanel.toggle()
                         }
                     }
-                    .padding(.trailing, showSidePanel ? -14 : 10) // Overlap handle with panel when expanded, align to right edge when collapsed
+                    .padding(.trailing, showSidePanel ? -12 : 10)
                     .zIndex(1)
 
                     if showSidePanel {
                         HStack(alignment: .top, spacing: 0) {
                             HStack(alignment: .top, spacing: 0) {
                                 // Control Panel
-                                VStack(spacing: 16) {
+                                VStack(spacing: 0) {
                                     if locationController.showAndroidOption {
                                         Picker("Device mode", selection: $locationController.deviceType) {
                                             Text("iOS").tag(0)
                                             Text("Android").tag(1)
-                                        }.labelsHidden().pickerStyle(.segmented)
+                                        }
+                                        .labelsHidden()
+                                        .pickerStyle(.segmented)
+                                        .padding(.vertical, 14)
+
+                                        PanelDivider()
                                     }
 
                                     if locationController.deviceType == 0 {
                                         iOSPanel()
                                             .environmentObject(locationController)
+                                            .frame(maxHeight: .infinity)
                                     } else {
                                         AndroidPanel()
                                             .environmentObject(locationController)
+                                            .frame(maxHeight: .infinity)
                                     }
 
-                                    Spacer()
+                                    PanelDivider()
 
-                                    Button(action: {
+                                    PanelButton(title: "Copy Logs", icon: "doc.on.doc", style: .subtle) {
                                         let log = locationController.logs.map { entry in
                                             let date = locationController.dateFormatter.string(from: entry.date)
                                             return "[\(date)] [\(entry.level.label)] [\(entry.location)] \(entry.message)"
@@ -248,26 +273,19 @@ struct ContentView: View {
                                         let pasteboard = NSPasteboard.general
                                         pasteboard.declareTypes([.string], owner: nil)
                                         pasteboard.setString(log, forType: .string)
-                                    }) {
-                                        HStack {
-                                            Image(systemName: "doc.on.doc")
-                                            Text("Logs")
-                                        }
-                                        .frame(maxWidth: .infinity)
                                     }
-                                    .buttonStyle(.bordered)
+                                    .padding(.vertical, 14)
                                 }
                                 .frame(width: 300)
                                 .padding(20)
                             }
-                            .background(
-                                ZStack {
-                                    Color.gray.opacity(0.15) // Transparent gray
-                                    Rectangle().fill(.ultraThinMaterial)
-                                }
+                            .background(.regularMaterial)
+                            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                    .stroke(Color(NSColor.separatorColor).opacity(0.5), lineWidth: 0.5)
                             )
-                            .cornerRadius(20)
-                            .shadow(color: Color.black.opacity(0.2), radius: 15, x: -5, y: 5)
+                            .shadow(color: Color.black.opacity(0.12), radius: 12, x: -3, y: 3)
                             .padding(.vertical, 40)
                             .padding(.trailing, 20)
                         }
@@ -278,19 +296,16 @@ struct ContentView: View {
             }
             .frame(minWidth: 800, minHeight: 500)
             .animation(.spring(), value: showSidePanel)
+            .onAppear {
+                locationController.mapVisibleInsetRight = showSidePanel ? sidePanelTotalWidth : 0
+            }
+            .onChange(of: showSidePanel) { newValue in
+                locationController.mapVisibleInsetRight = newValue ? sidePanelTotalWidth : 0
+            }
             .modifier(Alert(isPresented: $locationController.showingAlert, text: locationController.alertText))
         }
         .frame(minHeight: 800)
         .onAppear {
-            Task { @MainActor in
-                // When launched from Xcode (SPM), Xcode keeps focus: the app is
-                // not active and its window is not key, so keyboard events never
-                // arrive. Force both active app + key window before clearing focus.
-                NSApp.activate(ignoringOtherApps: true)
-                NSApp.mainWindow?.makeKeyAndOrderFront(nil)
-                NSApp.keyWindow?.makeFirstResponder(nil)
-            }
-
             eventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .keyUp]) { event in
                 let isKeyDown = event.type == .keyDown
 
@@ -336,6 +351,25 @@ struct ContentView: View {
     init(mapView: MapView, locationController: LocationController) {
         self.mapView = mapView
         self.locationController = locationController
+    }
+}
+
+private struct MapControlButton: View {
+    let icon: String
+    let action: () -> Void
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: icon)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundColor(.primary)
+                .frame(width: 28, height: 28)
+                .background(isHovered ? Color.primary.opacity(0.08) : Color.clear)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovered = $0 }
     }
 }
 

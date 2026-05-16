@@ -19,17 +19,17 @@ struct LocationsView: View {
     @State private var newLatLng = ""
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            header
-            if showAddForm { addForm }
-            locationList
+        PanelContainer {
+            VStack(alignment: .leading, spacing: 0) {
+                header
+                if showAddForm {
+                    Divider()
+                    addForm
+                }
+                Divider()
+                locationList
+            }
         }
-        .background(Color(NSColor.controlBackgroundColor).opacity(0.6))
-        .cornerRadius(10)
-        .overlay(
-            RoundedRectangle(cornerRadius: 10)
-                .stroke(Color(NSColor.separatorColor), lineWidth: 0.5)
-        )
         .alert("Rename \(selectedLocation.name)", isPresented: $renameAlertShowing) {
             TextField("New name", text: $updatedName)
             Button("Rename") { locationController.update(selectedLocation, with: updatedName) }
@@ -58,108 +58,88 @@ struct LocationsView: View {
 
     private var header: some View {
         HStack(spacing: 6) {
-            Image(systemName: "mappin.and.ellipse")
-                .foregroundColor(.accentColor)
-                .font(.callout)
             Text("Saved Locations")
                 .font(.callout)
-                .fontWeight(.semibold)
+                .fontWeight(.medium)
+                .foregroundColor(PanelTheme.textPrimary)
+
             if !locationController.savedLocations.isEmpty {
                 Text("\(locationController.savedLocations.count)")
                     .font(.caption2)
                     .fontWeight(.medium)
-                    .foregroundColor(.white)
+                    .foregroundColor(PanelTheme.textSecondary)
                     .padding(.horizontal, 5)
                     .padding(.vertical, 1)
-                    .background(Color.accentColor)
+                    .background(PanelTheme.buttonFill)
                     .clipShape(Capsule())
             }
+
             Spacer()
-            Button(action: { isImporting.toggle() }) {
-                Image(systemName: "square.and.arrow.down")
-            }
-            .buttonStyle(.borderless)
-            .help("Import locations")
 
-            Button(action: { isExporting.toggle() }) {
-                Image(systemName: "square.and.arrow.up")
+            PanelIconButton(icon: "square.and.arrow.down", help: "Import locations") {
+                isImporting.toggle()
             }
-            .buttonStyle(.borderless)
-            .help("Export locations")
-
-            Button(action: {
+            PanelIconButton(icon: "square.and.arrow.up", help: "Export locations") {
+                isExporting.toggle()
+            }
+            PanelIconButton(
+                icon: showAddForm ? "xmark" : "plus",
+                help: showAddForm ? "Cancel" : "Add location"
+            ) {
                 withAnimation(.easeInOut(duration: 0.2)) { showAddForm.toggle() }
                 if showAddForm { newName = ""; newLatLng = "" }
-            }) {
-                Image(systemName: showAddForm ? "xmark.circle.fill" : "plus.circle.fill")
-                    .foregroundColor(showAddForm ? .secondary : .accentColor)
             }
-            .buttonStyle(.borderless)
-            .help(showAddForm ? "Cancel" : "Add location")
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
-        .background(Color(NSColor.windowBackgroundColor).opacity(0.5))
     }
 
     private var addForm: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Divider()
-            HStack {
-                Image(systemName: "plus.circle")
-                    .foregroundColor(.accentColor)
-                    .font(.caption)
-                Text("Add Location")
-                    .font(.caption)
-                    .fontWeight(.semibold)
-                    .foregroundColor(.accentColor)
-            }
+        VStack(alignment: .leading, spacing: 8) {
             TextField("Name (optional)", text: $newName)
                 .textFieldStyle(.roundedBorder)
                 .font(.callout)
             TextField("Latitude, Longitude", text: $newLatLng)
                 .textFieldStyle(.roundedBorder)
                 .font(.callout)
-            Button(action: {
+            PanelButton(
+                title: "Add",
+                style: .prominent,
+                disabled: newLatLng.trimmingCharacters(in: .whitespaces).isEmpty
+            ) {
                 locationController.addSavedLocation(name: newName, latLng: newLatLng)
                 newName = ""
                 newLatLng = ""
                 withAnimation { showAddForm = false }
-            }) {
-                Text("Add")
-                    .frame(maxWidth: .infinity)
             }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.small)
-            .disabled(newLatLng.trimmingCharacters(in: .whitespaces).isEmpty)
         }
         .padding(.horizontal, 10)
-        .padding(.vertical, 8)
-        .background(Color.accentColor.opacity(0.05))
+        .padding(.vertical, 10)
     }
 
+    @ViewBuilder
     private var locationList: some View {
-        Group {
-            Divider()
-            if locationController.savedLocations.isEmpty {
-                emptyState
-            } else {
-                List(locationController.savedLocations, id: \.id) { location in
-                    LocationRow(
-                        location: location,
-                        onApply: { locationController.applySavedLocation(location) },
-                        onRename: {
-                            updatedName = location.name
-                            selectedLocation = location
-                            renameAlertShowing = true
-                        },
-                        onDelete: { locationController.removeLocation(location: location) }
-                    )
-                    .listRowInsets(EdgeInsets(top: 2, leading: 8, bottom: 2, trailing: 8))
+        if locationController.savedLocations.isEmpty {
+            emptyState
+        } else {
+            ScrollView {
+                LazyVStack(spacing: 4) {
+                    ForEach(locationController.savedLocations, id: \.id) { location in
+                        LocationRow(
+                            location: location,
+                            onApply:  { locationController.applySavedLocation(location) },
+                            onRename: {
+                                updatedName = location.name
+                                selectedLocation = location
+                                renameAlertShowing = true
+                            },
+                            onDelete: { locationController.removeLocation(location: location) }
+                        )
+                    }
                 }
-                .listStyle(.plain)
-                .frame(minHeight: 60, maxHeight: 220)
+                .padding(8)
             }
+            .frame(minHeight: 60, maxHeight: .infinity)
         }
     }
 
@@ -167,13 +147,13 @@ struct LocationsView: View {
         VStack(spacing: 6) {
             Image(systemName: "mappin.slash")
                 .font(.title3)
-                .foregroundColor(Color(NSColor.tertiaryLabelColor))
+                .foregroundColor(PanelTheme.textTertiary)
             Text("No saved locations")
                 .font(.caption)
-                .foregroundColor(.secondary)
+                .foregroundColor(PanelTheme.textSecondary)
             Text("Tap + to add, or use \"Save Point A\"")
                 .font(.caption2)
-                .foregroundColor(Color(NSColor.tertiaryLabelColor))
+                .foregroundColor(PanelTheme.textTertiary)
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 20)
@@ -192,17 +172,14 @@ private struct LocationRow: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            Image(systemName: "mappin.circle.fill")
-                .foregroundColor(.red)
-                .font(.callout)
-
             VStack(alignment: .leading, spacing: 1) {
                 Text(location.name.isEmpty ? "Untitled" : location.name)
                     .font(.callout)
+                    .foregroundColor(PanelTheme.textPrimary)
                     .lineLimit(1)
                 Text(String(format: "%.5f, %.5f", location.latitude, location.longitude))
                     .font(.caption2)
-                    .foregroundColor(.secondary)
+                    .foregroundColor(PanelTheme.textSecondary)
                     .monospacedDigit()
             }
 
@@ -210,39 +187,19 @@ private struct LocationRow: View {
 
             if isHovered {
                 HStack(spacing: 2) {
-                    IconButton(icon: "map", help: "Place on map", action: onApply)
-                    IconButton(icon: "pencil", help: "Rename", action: onRename)
-                    IconButton(icon: "trash", help: "Delete", color: .red, action: onDelete)
+                    PanelIconButton(icon: "map", help: "Place on map", action: onApply)
+                    PanelIconButton(icon: "pencil", help: "Rename", action: onRename)
+                    PanelIconButton(icon: "trash", help: "Delete", color: .red, action: onDelete)
                 }
                 .transition(.opacity)
             }
         }
-        .padding(.vertical, 3)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .background(PanelTheme.rowFill)
+        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
         .contentShape(Rectangle())
         .onHover { isHovered = $0 }
         .animation(.easeInOut(duration: 0.12), value: isHovered)
-    }
-}
-
-private struct IconButton: View {
-    let icon: String
-    let help: String
-    var color: Color = .secondary
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            Image(systemName: icon)
-                .foregroundColor(color)
-                .frame(width: 22, height: 22)
-        }
-        .buttonStyle(.borderless)
-        .help(help)
-    }
-}
-
-struct LocationsView_Previews: PreviewProvider {
-    static var previews: some View {
-        LocationsView()
     }
 }
