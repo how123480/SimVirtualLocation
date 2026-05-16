@@ -17,6 +17,8 @@ Easy to use MacOS 11+ application for easy mocking iOS device and simulator loca
 - **Joystick Navigation**: smoothly move around the map using keyboard arrow keys (with adjustable speed in Single Point mode).
 - **Unified Logging**: All actions are logged to a rotating file at `~/Library/Logs/SimVirtualLocation/app.log` (max 1MB × 5 backups), with personally identifiable information (home directory, UDID, IPv6 link-local) automatically redacted.
 - **Strongly-typed Status**: Device connection state (`DeviceStatus`) and simulation state (`SimulationStatus`) are modelled as enums, so the UI always shows a consistent localized label.
+- **Dedicated status zone**: The top of the control panel always shows two pill indicators — one for device state (Disconnected / Connecting… / Connected / Error) and one for simulation state (Idle / Mocking Point A / Simulating Route / Simulating A→B / Stopping…). Active states pulse, in-progress states show a spinner, errors turn red.
+- **Smart map centering**: Whenever the app flies the map (Apply to A, Simulate Route fit, A→B Linear fit, search-result pick, locate-me), the focused content lands in the *visible* portion of the map — the side panel's footprint is excluded from the "center" so the pin never sits behind the panel.
 - **One-time authorization for iOS 17+.** A background `pymobiledevice3 remote tunneld` daemon is launched on first connect (one admin password prompt); subsequent Start/Stop operations require no password. The daemon survives app restart and is reset only by Mac reboot.
 
 You can download compiled and signed app [here](https://skywalker-howardhoward.netlify.app/).
@@ -118,6 +120,16 @@ swift test
 ```
 
 For detailed Swift Package configuration, see [SWIFT_PACKAGE_SETUP.md](./SWIFT_PACKAGE_SETUP.md).
+
+### Working in a git worktree
+
+`SimVirtualLocation.xcodeproj/project.pbxproj` is ignored by git. New worktrees therefore have no `pbxproj`, which breaks Xcode, SweetPad, and `xcode-build-server`. After `git worktree add ...`, copy it in from the main checkout:
+
+```bash
+cp ../../SimVirtualLocation.xcodeproj/project.pbxproj SimVirtualLocation.xcodeproj/project.pbxproj
+```
+
+SwiftPM (`swift build`) does not need this file.
 
 ## Logs & Troubleshooting
 

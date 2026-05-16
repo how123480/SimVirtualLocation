@@ -136,6 +136,7 @@ Use `// MARK:` comments to organize code sections in this order:
 - Prefer `@EnvironmentObject` for passing controllers to child views
 - Keep view bodies readable; extract complex views into separate structs
 - Use view modifiers for reusable UI patterns
+- **All UI chrome — buttons, dividers, section labels, status indicators, containers — must come from `Views/DesignSystem.swift`.** See "UI Design System" below. Do not call `.bordered`, `.borderedProminent`, or build one-off `RoundedRectangle`/`Color.gray` chrome in feature code.
 
 ### Concurrency
 - **Controllers are isolated to `@MainActor`.** UI state (`@Published` properties) and view-bound work happens on the main actor by default; only delegate methods that the system invokes off-main are explicitly marked `nonisolated` (currently the `CLLocationManagerDelegate` callbacks). Those nonisolated methods hop back via `Task { @MainActor in ... }`.
@@ -198,8 +199,184 @@ For iOS Simulator and Android, Route / A→B keep the original per-tick approach
 
 ### Status Enums (`Models/DeviceStatus.swift`)
 - `DeviceStatus`: `.idle`, `.checkingDeveloperMode`, `.waitingAuthorization`, `.mounting`, `.connecting`, `.connected`, `.error(String)`. Use `deviceStatus.displayText` whenever a UI button needs to show progress; use `deviceStatus.isReady` to gate hardware updates.
-- `SimulationStatus`: `.idle`, `.route`, `.fromAToB`, `.mocking`. The joystick uses `simulationStatus.isMockingActive` to decide whether arrow keys should send live updates to the hardware.
+- `SimulationStatus`: `.idle`, `.route`, `.fromAToB`, `.mocking`, `.stopping`. The joystick uses `simulationStatus.isMockingActive` to decide whether arrow keys should send live updates to the hardware. `.stopping` is the async-teardown bookkeeping state — UI buttons should show a spinner and disable input while a stop is in flight, then snap back to `.idle` on completion.
 - When you add a new status, also add the localized `displayText` so UI never has to format strings inline.
+
+---
+
+## UI Design System (`Views/DesignSystem.swift`)
+
+The entire control panel uses one shared visual language. The single file `Views/DesignSystem.swift` owns all tokens and components.
+
+### Tokens — `enum PanelTheme`
+
+All fills are expressed as `Color.primary.opacity(...)` so they automatically invert for dark mode. **Never** hardcode `Color.gray`, `Color.white`, `NSColor.windowBackgroundColor`, etc. for control-panel surfaces.
+
+| Token | Value | Use |
+|---|---|---|
+| `containerFill` | `Color.primary.opacity(0.045)` | Group container backgrounds (Saved Locations) |
+| `rowFill` | `Color.primary.opacity(0.035)` | Per-row backgrounds inside lists |
+| `buttonFill` / `Hover` / `Pressed` | `0.11 / 0.16 / 0.22` | Standard `PanelButton` states |
+| `separator` / `separatorStrong` | `NSColor.separatorColor` @ 0.4 / 0.6 | Hairlines |
+| `radius` | `6` | All buttons |
+| `radiusContainer` | `10` | All grouped containers |
+| `textPrimary` / `textSecondary` / `textTertiary` | semantic | Three text levels; no others |
+
+### Components
+
+- **`PanelButton(title:icon:style:isLoading:disabled:action:)`** — the only button used in feature code. Text always centered via `frame(maxWidth: .infinity)`. Built-in hover and pressed transitions, optional inline `ProgressView`, optional `disabled` opacity. Four styles:
+  - `.standard` — subtle neutral fill, primary-color text. Most controls.
+  - `.prominent` — accent-tinted (light blue wash + accent text + accent border), **not** solid blue. Reserved for the primary CTA in a section (Start, Apply to A, Simulate Route).
+  - `.destructive` — red-tinted (light red wash + red text + red border). Stop / Disconnect / Delete.
+  - `.subtle` — borderless, secondary-foreground. Toolbars, chrome-light actions (e.g. `Copy Logs`).
+- **`PanelIconButton(icon:help:color:action:)`** — small icon-only button (22×22) with hover background; used for refresh, +, ×, map/pencil/trash, etc.
+- **`PanelDivider`** — `Divider().padding(.horizontal, -20)` so it bleeds past the sidebar's 20 px inner padding for an edge-to-edge hairline.
+- **`PanelSectionLabel(text:)`** — uppercase caption2, semibold, tracking 0.5, tertiary foreground. macOS Inspector convention.
+- **`PanelContainer<Content>`** — rounded subtle-fill container with hairline border. Wraps `LocationsView` body.
+- **`LiveStatusPill(label:color:pulses:isLoading:)`** — capsule with a colored dot. `pulses: true` (default) shows a radiating halo for active states; `pulses: false` for steady states (Connected, Idle, Error). `isLoading: true` swaps the dot for a tiny spinner — use for in-progress states (`.mounting`, `.connecting`, `.stopping`).
+- **`StatusSection(rows:[Row])`** — lays out an array of pills horizontally. Used by `StatusPanel` (in `iOSPanel.swift`) for the dedicated device-+-simulation status zone at the top of the control panel.
+
+### Toggle buttons (CTA pattern)
+
+Apply to A / Stop Mocking, Simulate Route / Stop Route, A→B Linear / Stop A→B — these are **the same button** swapping label, action, and style based on `simulationStatus`:
+
+- Idle: `.prominent`, label = action verb.
+- Active (this one's running): `.destructive`, label = `Stop …`.
+- Stopping: same style as active, `isLoading: true`, disabled, label = `Stopping…`.
+- Other simulation active (e.g. A→B is running while looking at Simulate Route): disabled.
+
+See `LocationSettingsPanel.simulateRouteButton` / `atoBButton` / `startStopSimulateButton` for the pattern.
+
+### Spacing rhythm
+
+Every top-level section in the control panel uses `.padding(.vertical, 14)` around `PanelDivider`s. This gives uniform 14 px breathing room above and below every hairline. Do not introduce one-off paddings (`.padding(.top, 6)` etc.); the rhythm is intentional and consistent across:
+
+- StatusPanel
+- iOSDeviceSettings / AndroidDeviceSettings
+- Mode picker + control area in LocationSettingsPanel
+- LocationsView
+- Copy Logs button at the bottom
+
+The sidebar VStack uses `spacing: 0`; gaps come exclusively from the section paddings, never from the parent VStack.
+
+---
+
+## UX Rules
+
+### Optimistic status updates
+
+When the user kicks off a mocking action, set `simulationStatus = .mocking` (or `.route` / `.fromAToB`) **synchronously** before the async device call. The button flips instantly to its `.destructive` state without waiting for a 100 ms – 1 s network round trip. Revert to `.idle` only on failure (in the `catch` branch of the async task).
+
+See `LocationController.run(location:)` for the canonical pattern:
+
+```swift
+currentRunTask?.cancel()
+if simulationStatus == .idle { simulationStatus = .mocking }
+// ...kick off async work; revert to .idle in catch
+```
+
+### Mode-switch auto-stop
+
+`handlePointsModeChange()` is called whenever `pointsMode` changes. If any simulation is currently mocking-active (`.route`, `.fromAToB`, or `.mocking`), it first `await stopSimulation(clearAnnotations: false)` and only then performs annotation cleanup (e.g. trimming Point B when switching to single). The whole block runs inside a `Task @MainActor` so the cleanup is sequenced *after* the async teardown — no race with the simulator process.
+
+### Point A persistence on stop
+
+For single-mode mocking, call `stopSimulation(clearAnnotations: false)` so Point A stays on the map and the user can re-apply without re-placing the pin. Route stops (`Simulate Route`, `A→B Linear`) keep the default `clearAnnotations: true` because A/B are tied to the route geometry.
+
+### Apply to A flies the map
+
+`setSelectedLocation()` (the Apply to A action) calls `centerVisibleOn(annotation.coordinate)` *before* `run(location:)`. The map flies to Point A — landing in the visible (un-covered) strip of the map — and *then* mocking starts. Keeps the user's eye on the location they're now mocking.
+
+### Map centering must respect the side panel
+
+The right side of the map is covered by the control panel when it's open. `LocationController.@Published var mapVisibleInsetRight: CGFloat` tracks that width; `ContentView` syncs it on `onAppear` and `onChange(of: showSidePanel)` using the single constant `sidePanelTotalWidth = 360`.
+
+Every fly-to / fit-to-rect call funnels through one of two helpers on `LocationController`:
+
+- `centerVisibleOn(_:)` — for a single coordinate (Point A placement, Apply to A, search picks, locate-me).
+- `showVisibleMapRect(_:edgeMargin:)` — for arbitrary rects (Simulate Route bounds, A→B Linear bounds).
+
+Both use `MKMapView.setVisibleMapRect(_:edgePadding:animated:)` with `NSEdgeInsets(right: mapVisibleInsetRight, ...)` so MapKit fits the content into the un-covered portion of the map. When the panel is closed, the inset is 0 and the helpers degrade to a normal full-window fit.
+
+**Do not call `mapView.mkMapView.setRegion(_:animated:)` directly for user-initiated camera moves.** Use the helpers.
+
+### Status zone
+
+The top of the control panel surfaces device + simulation state as two horizontal `LiveStatusPill`s rendered by `StatusPanel` (`iOSPanel.swift`). Color encoding:
+
+| State | Color | Pulse | Spinner |
+|---|---|---|---|
+| Idle | gray | no | no |
+| Active (Connected / Mocking / Simulating …) | green | yes for sim, no for connected | no |
+| In-progress (Connecting / Mounting / Stopping) | orange | no | yes |
+| Error | red | no | no |
+
+Animate state changes with `.easeInOut(duration: 0.25)`.
+
+---
+
+## Model invariants
+
+### `Location.id` must be a stored UUID
+
+`Location.id` is a stored `UUID` (not derived from `latitude`/`longitude`). This is required because:
+
+1. Saving two locations at the same coordinates needs to produce two distinct rows in `ForEach(savedLocations, id: \.id)` (otherwise SwiftUI dedupes to one row).
+2. `removeAll { $0.id == location.id }` must remove only the targeted row, not every same-coordinate sibling.
+
+The `Decodable` init synthesizes a fresh UUID when older saved data lacks the field, so existing user data still decodes:
+
+```swift
+init(from decoder: Decoder) throws {
+    let c = try decoder.container(keyedBy: CodingKeys.self)
+    self.id = (try? c.decode(UUID.self, forKey: .id)) ?? UUID()
+    // ...
+}
+```
+
+---
+
+## Window / launch gotchas
+
+### SPM-built executables and keyboard focus
+
+The app supports two launch paths:
+
+- Xcode (`open SimVirtualLocation.xcodeproj`) — produces a proper `.app` bundle with Info.plist; activation policy is `.regular` by default.
+- Swift Package Manager (`open Package.swift` or `swift run`) — produces a bare executable with no bundle. macOS launches it as `.accessory`, so the main window can never become key and keyboard events are silently dropped (TextField won't accept input, arrow keys for joystick do nothing).
+
+The fix lives in `Views/Main.swift`:
+
+```swift
+class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        NSApp.setActivationPolicy(.regular)
+    }
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        DispatchQueue.main.async {
+            NSApp.activate(ignoringOtherApps: true)
+            if let window = NSApp.windows.first(where: { $0.canBecomeKey }) {
+                window.makeKeyAndOrderFront(nil)
+                window.makeFirstResponder(nil)
+            }
+        }
+    }
+}
+```
+
+Wired in via `@NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate` on `SimVirtualLocationApp`. Don't remove these — both launch paths depend on them.
+
+### Worktrees and `project.pbxproj`
+
+`SimVirtualLocation.xcodeproj/project.pbxproj` is in `.gitignore` (chosen to avoid frequent merge conflicts). Git worktrees do not inherit ignored files from the parent checkout, so a fresh worktree has no `project.pbxproj` — `xcode-build-server`, SweetPad, and direct Xcode opens all fail with cryptic errors.
+
+When creating a new worktree, copy the file in:
+
+```bash
+cp ../../SimVirtualLocation.xcodeproj/project.pbxproj SimVirtualLocation.xcodeproj/project.pbxproj
+```
+
+SwiftPM (`swift build`) does not need this file.
 
 ### Logging (`Logic/Logger.swift`)
 - All logging must go through `AppLogger.shared`. Helpers: `.debug(_:)`, `.info(_:)`, `.warn(_:)`, `.error(_:)` (each takes an `@autoclosure`).
