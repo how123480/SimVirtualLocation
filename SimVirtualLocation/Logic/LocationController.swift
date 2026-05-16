@@ -131,6 +131,11 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
 
     @Published var savedLocations: [Location] = []
 
+    /// Width (px) of the side panel currently covering the right edge of the
+    /// map. Set by ContentView so that fly-to operations can offset the visible
+    /// center, keeping the focused point in the un-covered area.
+    @Published var mapVisibleInsetRight: CGFloat = 0
+
     // MARK: - Private
 
     private let mapView: MapView
@@ -248,6 +253,7 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
             showAlert("Point A not selected")
             return
         }
+        centerVisibleOn(annotation.coordinate)
         run(location: annotation.coordinate)
     }
 
@@ -294,8 +300,8 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
                 self.tracks = []
                 self.mapView.mkMapView.addOverlay(route.polyline, level: .aboveRoads)
 
-                let rect = route.polyline.boundingMapRect
-                self.mapView.mkMapView.setRegion(MKCoordinateRegion(rect.insetBy(dx: -1000, dy: -1000)), animated: true)
+                let rect = route.polyline.boundingMapRect.insetBy(dx: -1000, dy: -1000)
+                self.showVisibleMapRect(rect)
 
                 if autoSimulate { self.simulateRoute() }
             }
@@ -344,6 +350,10 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
             currentPolyline = [startPoint.coordinate, endPoint.coordinate]
             invalidateState()
             simulationStatus = .fromAToB
+
+            let rect = polyline.boundingMapRect.insetBy(dx: -1000, dy: -1000)
+            showVisibleMapRect(rect)
+
             startMovementTimer()
             kickoffGPXPlaybackIfNeeded()
         }
@@ -371,8 +381,7 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
         }
         isMapCentered = true
         mapView.mkMapView.showsUserLocation = true
-        let region = MKCoordinateRegion(center: location.coordinate, latitudinalMeters: 1000, longitudinalMeters: 1000)
-        mapView.mkMapView.setRegion(mapView.mkMapView.regionThatFits(region), animated: true)
+        centerVisibleOn(location.coordinate)
     }
 
     // MARK: Android
@@ -461,8 +470,7 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
                 self.putLocationOnMap(location: .init(name: completion.title,
                                                       latitude: coord.latitude,
                                                       longitude: coord.longitude))
-                let region = MKCoordinateRegion(center: coord, latitudinalMeters: 1000, longitudinalMeters: 1000)
-                self.mapView.mkMapView.setRegion(region, animated: true)
+                self.centerVisibleOn(coord)
             }
         }
     }
@@ -493,8 +501,7 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
         searchResults = []
         let name = item.name ?? item.placemark.title ?? "Unknown"
         putLocationOnMap(location: .init(name: name, latitude: coord.latitude, longitude: coord.longitude))
-        let region = MKCoordinateRegion(center: coord, latitudinalMeters: 1000, longitudinalMeters: 1000)
-        mapView.mkMapView.setRegion(region, animated: true)
+        centerVisibleOn(coord)
     }
 
     // MARK: - MKLocalSearchCompleterDelegate
@@ -719,15 +726,75 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
 
     private func flyToIfPointA(_ coord: CLLocationCoordinate2D) {
         guard annotations.count == 1 else { return }
-        let region = MKCoordinateRegion(center: coord, latitudinalMeters: 1000, longitudinalMeters: 1000)
-        mapView.mkMapView.setRegion(region, animated: true)
+        centerVisibleOn(coord)
     }
 
     func applySavedLocation(_ location: Location) {
         let coord = CLLocationCoordinate2D(latitude: location.latitude, longitude: location.longitude)
         addLocation(coordinate: coord)
-        let region = MKCoordinateRegion(center: coord, latitudinalMeters: 1000, longitudinalMeters: 1000)
-        mapView.mkMapView.setRegion(region, animated: true)
+        centerVisibleOn(coord)
+    }
+
+    // MARK: - Visible-area map centering
+    //
+    // All fly-to / fit-to-rect calls funnel through these two helpers so the
+    // side-panel offset is honored consistently. There are exactly three
+    // user-facing operations that move the map programmatically:
+    //
+    //   1. Point A placement / re-apply  → centerVisibleOn(coord)
+    //   2. Simulate Route (MKDirections) → showVisibleMapRect(route bounds)
+    //   3. A → B Linear                  → showVisibleMapRect(line bounds)
+    //
+    // The same helpers also serve `updateMapRegion` (locate-me button) and
+    // search-result picks. When the side panel is hidden,
+    // `mapVisibleInsetRight` is 0 and the helpers degrade to a plain fit.
+
+    /// Recenters the map on a single coordinate, keeping it inside the area
+    /// NOT covered by the side panel.
+    private func centerVisibleOn(
+        _ coord: CLLocationCoordinate2D,
+        latitudinalMeters: CLLocationDistance = 1000,
+        longitudinalMeters: CLLocationDistance = 1000
+    ) {
+        let region = MKCoordinateRegion(
+            center: coord,
+            latitudinalMeters: latitudinalMeters,
+            longitudinalMeters: longitudinalMeters
+        )
+        showVisibleMapRect(mapRect(for: region), edgeMargin: 20)
+    }
+
+    /// Fits an arbitrary `MKMapRect` (route bounds, A→B line, etc.) into the
+    /// un-covered portion of the map.
+    private func showVisibleMapRect(_ rect: MKMapRect, edgeMargin: CGFloat = 40) {
+        let insets = NSEdgeInsets(
+            top: edgeMargin,
+            left: edgeMargin,
+            bottom: edgeMargin,
+            right: max(mapVisibleInsetRight, edgeMargin)
+        )
+        mapView.mkMapView.setVisibleMapRect(rect, edgePadding: insets, animated: true)
+    }
+
+    /// Converts an `MKCoordinateRegion` (center + span) into the equivalent
+    /// `MKMapRect`, used as the input for `setVisibleMapRect(_:edgePadding:_:)`.
+    private func mapRect(for region: MKCoordinateRegion) -> MKMapRect {
+        let topLeft = CLLocationCoordinate2D(
+            latitude: region.center.latitude + region.span.latitudeDelta / 2,
+            longitude: region.center.longitude - region.span.longitudeDelta / 2
+        )
+        let bottomRight = CLLocationCoordinate2D(
+            latitude: region.center.latitude - region.span.latitudeDelta / 2,
+            longitude: region.center.longitude + region.span.longitudeDelta / 2
+        )
+        let p1 = MKMapPoint(topLeft)
+        let p2 = MKMapPoint(bottomRight)
+        return MKMapRect(
+            x: min(p1.x, p2.x),
+            y: min(p1.y, p2.y),
+            width: abs(p1.x - p2.x),
+            height: abs(p1.y - p2.y)
+        )
     }
 
     func showAlert(_ text: String) {
@@ -971,15 +1038,21 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
     }
 
     private func handlePointsModeChange() {
-        if isRouteSimulationActive {
-            // Mode switching is not allowed during simulation (would cause A/B to be deleted)
-            return
-        }
-        if pointsMode == .single {
-            Task { await stopSimulation(clearAnnotations: false) }
-            if annotations.count == 2, let second = annotations.last {
+        // Whenever the user switches modes, terminate any simulation that
+        // belongs to the previous mode so the new mode starts clean.
+        // .mocking → single-point; .route/.fromAToB → two-point.
+        let needsStop = simulationStatus.isMockingActive
+        let switchingToSingle = pointsMode == .single
+
+        Task { @MainActor in
+            if needsStop {
+                await stopSimulation(clearAnnotations: false)
+            }
+            if switchingToSingle, annotations.count == 2, let second = annotations.last {
                 mapView.mkMapView.removeAnnotation(second)
-                if let route { mapView.mkMapView.removeOverlay(route.polyline) }
+                if let route = self.route {
+                    mapView.mkMapView.removeOverlay(route.polyline)
+                }
                 annotations = [annotations[0]]
             }
         }
@@ -1023,6 +1096,10 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
         defaults.set(isEmulator, forKey: "is_emulator")
 
         currentRunTask?.cancel()
+        // Flip UI to "mocking" immediately so the Apply→Stop toggle feels
+        // instantaneous. The async device call below may take hundreds of ms.
+        // On failure, the catch branches revert to .idle.
+        if simulationStatus == .idle { simulationStatus = .mocking }
         let weakAlert: (String) -> Void = { [weak self] msg in
             Task { @MainActor in self?.showAlert(msg) }
         }
@@ -1031,7 +1108,10 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
         if deviceType != 0 {
             currentRunTask = Task {
                 if Task.isCancelled { return }
-                guard ensureAdbAvailable() else { return }
+                guard ensureAdbAvailable() else {
+                    if simulationStatus == .mocking { simulationStatus = .idle }
+                    return
+                }
                 logger.debug("Android location: deviceId=\(adbDeviceId), isEmulator=\(isEmulator)")
                 await runner.runOnAndroid(
                     location: location,
@@ -1040,7 +1120,6 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
                     isEmulator: isEmulator,
                     showAlert: weakAlert
                 )
-                if simulationStatus == .idle { simulationStatus = .mocking }
             }
             return
         }
@@ -1053,8 +1132,8 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
                     guard let self else { return }
                     do {
                         try await self.client.setLocation(location, transport: .rsd(udid: self.selectedDevice))
-                        if self.simulationStatus == .idle { self.simulationStatus = .mocking }
                     } catch {
+                        if self.simulationStatus == .mocking { self.simulationStatus = .idle }
                         self.errorHandler.handle(error)
                     }
                 }
@@ -1064,8 +1143,8 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
                     guard let self else { return }
                     do {
                         try await self.client.setLocation(location, transport: .legacy(udid: self.selectedDevice))
-                        if self.simulationStatus == .idle { self.simulationStatus = .mocking }
                     } catch {
+                        if self.simulationStatus == .mocking { self.simulationStatus = .idle }
                         self.errorHandler.handle(error)
                     }
                 }
@@ -1086,7 +1165,6 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
                 selectedSimulator: selectedSimulator,
                 bootedSimulators: bootedSimulators
             )
-            if simulationStatus == .idle { simulationStatus = .mocking }
         }
     }
 
