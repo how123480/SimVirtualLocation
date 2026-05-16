@@ -237,19 +237,21 @@ final class MobileDeviceClient: ObservableObject {
         logger.info("tunneld launched and ready")
     }
 
-    /// Kill all residual `simulate-location` processes (both `set` and `play`).
-    /// Called by LocationController after gpxPlayback.stop() and currentRunTask.cancel()
-    /// as a safety net, because:
-    ///   - Swift Task cancellation doesn't kill the underlying Process.
-    ///   - Process-tree kill may miss workers spawned after the snapshot.
+    /// Kill residual `simulate-location set` and `simulate-location play` processes.
+    /// Uses targeted patterns (not the generic "simulate-location") so the
+    /// subsequent `simulate-location clear` command is never matched and killed.
     func killResidualSimulationProcesses() async {
-        let task = Process()
-        task.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")
-        task.arguments = ["-f", "simulate-location"]
-        task.standardOutput = FileHandle.nullDevice
-        task.standardError = FileHandle.nullDevice
-        try? task.run()
-        // Brief pause so pkill takes effect before clearLocation command starts.
+        for pattern in ["simulate-location set", "simulate-location play"] {
+            let task = Process()
+            task.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")
+            task.arguments = ["-f", pattern]
+            task.standardOutput = FileHandle.nullDevice
+            task.standardError = FileHandle.nullDevice
+            try? task.run()
+            task.waitUntilExit()
+        }
+        // Brief pause so killed processes fully release device resources
+        // before clearLocation opens a new connection.
         try? await Task.sleep(nanoseconds: 150_000_000)
     }
 
