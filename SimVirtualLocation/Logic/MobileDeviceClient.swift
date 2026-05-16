@@ -77,8 +77,8 @@ final class MobileDeviceClient: ObservableObject {
         }
         let devices = try JSONDecoder().decode([Device].self, from: result.stdout)
         var seen: Set<String> = []
-        let unique = devices.filter { seen.insert($0.id).inserted }
-        logger.info("Connected devices: \(unique.map { "\($0.name) (\($0.version))" }.joined(separator: ", "))")
+        let unique = devices.filter { seen.insert($0.id).inserted && $0.isUSB }
+        logger.info("Connected USB devices: \(unique.map { "\($0.name) (\($0.version))" }.joined(separator: ", "))")
         return unique
     }
 

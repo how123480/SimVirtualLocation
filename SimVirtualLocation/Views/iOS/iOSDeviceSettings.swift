@@ -41,6 +41,7 @@ struct iOSDeviceSettings: View {
                         Text("\(device.name) (\(device.version))")
                     }
                 }
+                .disabled(locationController.deviceStatus.isActive)
 
                 Button(action: {
                     Task {
@@ -49,6 +50,7 @@ struct iOSDeviceSettings: View {
                 }, label: {
                     Text("Refresh").frame(maxWidth: .infinity)
                 })
+                .disabled(locationController.deviceStatus.isActive)
                 
                 Button(action: {
                     if locationController.deviceStatus.isActive {

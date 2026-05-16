@@ -236,6 +236,7 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
             return
         }
         addLocation(coordinate: coord)
+        flyToIfPointA(coord)
     }
 
     func setSelectedLocation() {
@@ -678,6 +679,23 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
         saveSavedLocations()
     }
 
+    func addSavedLocation(name: String, latLng: String) {
+        let parts = latLng.components(separatedBy: ",")
+        guard parts.count == 2,
+              let lat = Double(parts[0].trimmingCharacters(in: .whitespacesAndNewlines)),
+              let lng = Double(parts[1].trimmingCharacters(in: .whitespacesAndNewlines)),
+              lat >= -90, lat <= 90, lng >= -180, lng <= 180 else {
+            showAlert("Invalid coordinates — use format: lat, lng")
+            return
+        }
+        let label = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let finalName = label.isEmpty
+            ? String(format: "%.5f, %.5f", lat, lng)
+            : label
+        savedLocations.append(Location(name: finalName, latitude: lat, longitude: lng))
+        saveSavedLocations()
+    }
+
     func removeLocation(location: Location) {
         savedLocations.removeAll { $0.id == location.id }
         saveSavedLocations()
@@ -694,7 +712,15 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
     }
 
     func putLocationOnMap(location: Location) {
-        addLocation(coordinate: CLLocationCoordinate2D(latitude: location.latitude, longitude: location.longitude))
+        let coord = CLLocationCoordinate2D(latitude: location.latitude, longitude: location.longitude)
+        addLocation(coordinate: coord)
+        flyToIfPointA(coord)
+    }
+
+    private func flyToIfPointA(_ coord: CLLocationCoordinate2D) {
+        guard annotations.count == 1 else { return }
+        let region = MKCoordinateRegion(center: coord, latitudinalMeters: 1000, longitudinalMeters: 1000)
+        mapView.mkMapView.setRegion(region, animated: true)
     }
 
     func applySavedLocation(_ location: Location) {

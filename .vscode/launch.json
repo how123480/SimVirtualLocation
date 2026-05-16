@@ -1,0 +1,24 @@
+{
+    "configurations": [
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:tunneld-refactor-design}",
+            "name": "Debug SimVirtualLocation",
+            "target": "SimVirtualLocation",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug SimVirtualLocation"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:tunneld-refactor-design}",
+            "name": "Release SimVirtualLocation",
+            "target": "SimVirtualLocation",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release SimVirtualLocation"
+        }
+    ]
+}
