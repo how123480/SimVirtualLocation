@@ -402,26 +402,27 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
 
     // MARK: Simulation control
 
+    /// Kill every running simulate-location process and cancel all Swift tasks.
+    /// Called by both stopSimulation() and stopDevice() so neither path leaves orphans.
+    private func killAllActiveProcesses() async {
+        pendingSpeedRegenTask?.cancel()
+        pendingSpeedRegenTask = nil
+        timer?.invalidate()
+        timer = nil
+        await gpxPlayback.stop()
+        currentRunTask?.cancel()
+        currentRunTask = nil
+        // pkill safety net: kills simulate-location set/play processes that survive
+        // Swift Task cancellation or process-tree SIGKILL.
+        await client.killResidualSimulationProcesses()
+    }
+
     func stopSimulation(clearAnnotations: Bool = true) async {
         // Idempotent: a second call while already stopping is a no-op.
         guard simulationStatus.isMockingActive else { return }
         simulationStatus = .stopping
 
-        pendingSpeedRegenTask?.cancel()
-        pendingSpeedRegenTask = nil
-        timer?.invalidate()
-        timer = nil
-
-        await gpxPlayback.stop()
-
-        // Clear any in-flight per-tick location task.
-        currentRunTask?.cancel()
-        currentRunTask = nil
-
-        // pkill safety net: catches simulate-location processes that survived process-tree kill
-        // (e.g. asyncio workers spawned after snapshot) and in-flight one-shot `set` commands
-        // whose underlying Process ignores Swift Task cancellation.
-        await client.killResidualSimulationProcesses()
+        await killAllActiveProcesses()
 
         if let transport = currentTransport() {
             do {
@@ -627,6 +628,7 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
     }
 
     private func stopLegacyDevice() async {
+        await killAllActiveProcesses()
         simulationStatus = .idle
         do {
             try await client.clearLocation(transport: .legacy(udid: selectedDevice))
@@ -641,6 +643,7 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
     }
 
     func stopRSDTunnel() async {
+        await killAllActiveProcesses()
         simulationStatus = .idle
         do {
             try await client.clearLocation(transport: .rsd(udid: selectedDevice))
