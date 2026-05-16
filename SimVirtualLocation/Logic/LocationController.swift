@@ -402,8 +402,10 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
 
     // MARK: Simulation control
 
-    /// Kill every running simulate-location process and cancel all Swift tasks.
-    /// Called by both stopSimulation() and stopDevice() so neither path leaves orphans.
+    /// Cancel all Swift-level tasks and stop the GPX process handle.
+    /// Does NOT pkill — callers must call client.killResidualSimulationProcesses()
+    /// AFTER clearLocation so the broad "simulate-location" pattern doesn't
+    /// match and kill the in-flight clear command.
     private func killAllActiveProcesses() async {
         pendingSpeedRegenTask?.cancel()
         pendingSpeedRegenTask = nil
@@ -412,9 +414,6 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
         await gpxPlayback.stop()
         currentRunTask?.cancel()
         currentRunTask = nil
-        // pkill safety net: kills simulate-location set/play processes that survive
-        // Swift Task cancellation or process-tree SIGKILL.
-        await client.killResidualSimulationProcesses()
     }
 
     func stopSimulation(clearAnnotations: Bool = true) async {
@@ -431,6 +430,7 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
                 errorHandler.handle(error)
             }
         }
+        await client.killResidualSimulationProcesses()
 
         mapView.mkMapView.removeOverlays(mapView.mkMapView.overlays)
         route = nil
@@ -635,6 +635,7 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
         } catch {
             errorHandler.handle(error)
         }
+        await client.killResidualSimulationProcesses()
 
         mapView.mkMapView.removeAnnotations(mapView.mkMapView.annotations)
         annotations = []
@@ -650,6 +651,7 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
         } catch {
             errorHandler.handle(error)
         }
+        await client.killResidualSimulationProcesses()
 
         mapView.mkMapView.removeAnnotations(mapView.mkMapView.annotations)
         annotations = []

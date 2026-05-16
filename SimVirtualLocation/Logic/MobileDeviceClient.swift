@@ -237,22 +237,17 @@ final class MobileDeviceClient: ObservableObject {
         logger.info("tunneld launched and ready")
     }
 
-    /// Kill residual `simulate-location set` and `simulate-location play` processes.
-    /// Uses targeted patterns (not the generic "simulate-location") so the
-    /// subsequent `simulate-location clear` command is never matched and killed.
+    /// Kill all residual `simulate-location` processes (set, play, or otherwise).
+    /// Must be called AFTER clearLocation has completed — the broad pattern would
+    /// also match a running clearLocation process.
     func killResidualSimulationProcesses() async {
-        for pattern in ["simulate-location set", "simulate-location play"] {
-            let task = Process()
-            task.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")
-            task.arguments = ["-f", pattern]
-            task.standardOutput = FileHandle.nullDevice
-            task.standardError = FileHandle.nullDevice
-            try? task.run()
-            task.waitUntilExit()
-        }
-        // Brief pause so killed processes fully release device resources
-        // before clearLocation opens a new connection.
-        try? await Task.sleep(nanoseconds: 150_000_000)
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")
+        task.arguments = ["-f", "simulate-location"]
+        task.standardOutput = FileHandle.nullDevice
+        task.standardError = FileHandle.nullDevice
+        try? task.run()
+        task.waitUntilExit()
     }
 
     /// Manual-only. Not wired to any default UI affordance.
