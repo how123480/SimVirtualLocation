@@ -418,6 +418,11 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
         currentRunTask?.cancel()
         currentRunTask = nil
 
+        // pkill safety net: catches simulate-location processes that survived process-tree kill
+        // (e.g. asyncio workers spawned after snapshot) and in-flight one-shot `set` commands
+        // whose underlying Process ignores Swift Task cancellation.
+        await client.killResidualSimulationProcesses()
+
         if let transport = currentTransport() {
             do {
                 try await client.clearLocation(transport: transport)
