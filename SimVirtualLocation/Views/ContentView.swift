@@ -283,6 +283,9 @@ struct ContentView: View {
         .frame(minHeight: 800)
         .onAppear {
             Task { @MainActor in
+                // When launched from Xcode (SPM), Xcode stays active and the app
+                // window never becomes key — no keyboard events reach the app.
+                NSApp.activate(ignoringOtherApps: true)
                 NSApp.keyWindow?.makeFirstResponder(nil)
             }
 
