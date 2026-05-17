@@ -96,7 +96,10 @@ struct LocationSettingsPanel: View {
             }
 
             HStack(spacing: 8) {
-                startStopSimulateButton
+                applyToAButton
+                if isMockingActive || isStoppingMocking {
+                    stopMockingIconButton
+                }
                 saveIconButton
             }
 
@@ -128,24 +131,49 @@ struct LocationSettingsPanel: View {
         .help("Save Point A")
     }
 
-    // MARK: - Single-point start/stop
+    // MARK: - Single-point apply / stop
 
-    private var startStopSimulateButton: some View {
-        let isActive = locationController.simulationStatus == .mocking
-        let stopping = isStopping && isActive
-        let label = stopping ? "Stopping…" : isActive ? "Stop Mocking A" : "Apply to A"
-        let style: PanelButton.Style = isActive ? .destructive : .prominent
-        let action: () -> Void = isActive
-            ? { Task { await locationController.stopSimulation(clearAnnotations: false) } }
-            : { locationController.setSelectedLocation() }
-        let disabled = stopping || (isRouteActive && !isActive)
-        return PanelButton(
-            title: label,
-            style: style,
-            isLoading: stopping,
-            disabled: disabled,
-            action: action
+    private var isMockingActive: Bool {
+        locationController.simulationStatus == .mocking
+    }
+
+    private var isStoppingMocking: Bool {
+        isStopping && isMockingActive
+    }
+
+    private var applyToAButton: some View {
+        PanelButton(
+            title: "Apply to A",
+            style: .prominent,
+            disabled: isRouteActive || isStoppingMocking,
+            action: { locationController.setSelectedLocation() }
         )
+    }
+
+    private var stopMockingIconButton: some View {
+        Button {
+            Task { await locationController.stopSimulation(clearAnnotations: false) }
+        } label: {
+            Group {
+                if isStoppingMocking {
+                    ProgressView().controlSize(.small)
+                } else {
+                    Image(systemName: "stop.fill")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundColor(.red)
+                }
+            }
+            .frame(width: 30, height: 26)
+            .background(Color.red.opacity(0.12))
+            .clipShape(RoundedRectangle(cornerRadius: PanelTheme.radius, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: PanelTheme.radius, style: .continuous)
+                    .stroke(Color.red.opacity(0.35), lineWidth: 0.5)
+            )
+        }
+        .buttonStyle(.plain)
+        .disabled(isStoppingMocking)
+        .help("Stop Mocking A")
     }
 
     // MARK: - Route section
