@@ -180,7 +180,7 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
     // Health check (iOS physical device only)
     private var healthCheckTimer: Timer?
     private var healthCheckFailureStreak: Int = 0
-    private static let healthCheckInterval: TimeInterval = 10.0
+    private static let healthCheckInterval: TimeInterval = 30.0
     private static let healthCheckFailureThreshold = 2
 
     // MARK: - Init
