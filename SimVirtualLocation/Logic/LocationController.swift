@@ -1092,19 +1092,14 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
         // belongs to the previous mode so the new mode starts clean.
         // .mocking → single-point; .route/.fromAToB → two-point.
         let needsStop = simulationStatus.isMockingActive
-        let switchingToSingle = pointsMode == .single
-
         Task { @MainActor in
             if needsStop {
                 await stopSimulation(clearAnnotations: false)
             }
-            if switchingToSingle, annotations.count == 2, let second = annotations.last {
-                mapView.mkMapView.removeAnnotation(second)
-                if let route = self.route {
-                    mapView.mkMapView.removeOverlay(route.polyline)
-                }
-                annotations = [annotations[0]]
-            }
+            mapView.mkMapView.removeAnnotations(mapView.mkMapView.annotations)
+            mapView.mkMapView.removeOverlays(mapView.mkMapView.overlays)
+            annotations = []
+            route = nil
         }
     }
 
