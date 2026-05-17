@@ -17,11 +17,21 @@ struct LocationsView: View {
     @State private var showAddForm = false
     @State private var newName = ""
     @State private var newLatLng = ""
+    @State private var showManageLabels = false
+    /// nil = "All". Otherwise filters list to locations carrying this label.
+    @State private var selectedLabelID: UUID?
+
+    private var filteredLocations: [Location] {
+        guard let id = selectedLabelID else { return locationController.savedLocations }
+        return locationController.savedLocations.filter { $0.labelIDs.contains(id) }
+    }
 
     var body: some View {
         PanelContainer {
             VStack(alignment: .leading, spacing: 0) {
                 header
+                Divider()
+                filterChipsRow
                 if showAddForm {
                     Divider()
                     addForm
@@ -34,6 +44,10 @@ struct LocationsView: View {
             TextField("New name", text: $updatedName)
             Button("Rename") { locationController.update(selectedLocation, with: updatedName) }
             Button("Cancel", role: .cancel) {}
+        }
+        .sheet(isPresented: $showManageLabels) {
+            ManageLabelsView()
+                .environmentObject(locationController)
         }
         .fileExporter(
             isPresented: $isExporting,
@@ -94,6 +108,49 @@ struct LocationsView: View {
         .padding(.vertical, 8)
     }
 
+    private var filterChipsRow: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                FilterChip(
+                    label: "All",
+                    isSelected: selectedLabelID == nil
+                ) {
+                    selectedLabelID = nil
+                }
+
+                ForEach(locationController.locationLabels) { label in
+                    FilterChip(
+                        label: label.name,
+                        isSelected: selectedLabelID == label.id
+                    ) {
+                        selectedLabelID = (selectedLabelID == label.id) ? nil : label.id
+                    }
+                }
+
+                Button {
+                    showManageLabels = true
+                } label: {
+                    Image(systemName: "tag")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundColor(PanelTheme.textSecondary)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(PanelTheme.buttonFill)
+                        .clipShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .help("Manage labels")
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+        }
+        .onChange(of: locationController.locationLabels) { labels in
+            if let id = selectedLabelID, !labels.contains(where: { $0.id == id }) {
+                selectedLabelID = nil
+            }
+        }
+    }
+
     private var addForm: some View {
         VStack(alignment: .leading, spacing: 8) {
             TextField("Name (optional)", text: $newName)
@@ -121,19 +178,35 @@ struct LocationsView: View {
     private var locationList: some View {
         if locationController.savedLocations.isEmpty {
             emptyState
+        } else if filteredLocations.isEmpty {
+            VStack(spacing: 6) {
+                Image(systemName: "line.3.horizontal.decrease.circle")
+                    .font(.title3)
+                    .foregroundColor(PanelTheme.textTertiary)
+                Text("No locations under this label")
+                    .font(.caption)
+                    .foregroundColor(PanelTheme.textSecondary)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 20)
         } else {
             ScrollView {
                 LazyVStack(spacing: 4) {
-                    ForEach(locationController.savedLocations, id: \.id) { location in
+                    ForEach(filteredLocations, id: \.id) { location in
                         LocationRow(
                             location: location,
+                            allLabels: locationController.locationLabels,
                             onApply:  { locationController.applySavedLocation(location) },
                             onRename: {
                                 updatedName = location.name
                                 selectedLocation = location
                                 renameAlertShowing = true
                             },
-                            onDelete: { locationController.removeLocation(location: location) }
+                            onDelete: { locationController.removeLocation(location: location) },
+                            onToggleLabel: { label in
+                                locationController.toggleLabel(label, on: location)
+                            },
+                            onManageLabels: { showManageLabels = true }
                         )
                     }
                 }
@@ -160,19 +233,56 @@ struct LocationsView: View {
     }
 }
 
-// MARK: - Row
+// MARK: - Filter chip
 
-private struct LocationRow: View {
-    let location: Location
-    let onApply: () -> Void
-    let onRename: () -> Void
-    let onDelete: () -> Void
+private struct FilterChip: View {
+    let label: String
+    let isSelected: Bool
+    let action: () -> Void
 
     @State private var isHovered = false
 
     var body: some View {
+        Button(action: action) {
+            Text(label)
+                .font(.caption)
+                .fontWeight(isSelected ? .semibold : .regular)
+                .foregroundColor(isSelected ? .white : PanelTheme.textPrimary)
+                .lineLimit(1)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 4)
+                .background(
+                    Capsule().fill(isSelected
+                        ? Color.accentColor
+                        : (isHovered ? PanelTheme.buttonFillHover : PanelTheme.buttonFill))
+                )
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovered = $0 }
+    }
+}
+
+// MARK: - Row
+
+private struct LocationRow: View {
+    let location: Location
+    let allLabels: [LocationLabel]
+    let onApply: () -> Void
+    let onRename: () -> Void
+    let onDelete: () -> Void
+    let onToggleLabel: (LocationLabel) -> Void
+    let onManageLabels: () -> Void
+
+    @State private var isHovered = false
+    @State private var showLabelPicker = false
+
+    private var assignedLabels: [LocationLabel] {
+        allLabels.filter { location.labelIDs.contains($0.id) }
+    }
+
+    var body: some View {
         HStack(spacing: 8) {
-            VStack(alignment: .leading, spacing: 1) {
+            VStack(alignment: .leading, spacing: 2) {
                 Text(location.name.isEmpty ? "Untitled" : location.name)
                     .font(.callout)
                     .foregroundColor(PanelTheme.textPrimary)
@@ -181,12 +291,45 @@ private struct LocationRow: View {
                     .font(.caption2)
                     .foregroundColor(PanelTheme.textSecondary)
                     .monospacedDigit()
+                if !assignedLabels.isEmpty {
+                    HStack(spacing: 4) {
+                        ForEach(assignedLabels.prefix(3)) { label in
+                            Text(label.name)
+                                .font(.system(size: 9, weight: .medium))
+                                .foregroundColor(PanelTheme.textSecondary)
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 1)
+                                .background(PanelTheme.buttonFill)
+                                .clipShape(Capsule())
+                        }
+                        if assignedLabels.count > 3 {
+                            Text("+\(assignedLabels.count - 3)")
+                                .font(.system(size: 9, weight: .medium))
+                                .foregroundColor(PanelTheme.textTertiary)
+                        }
+                    }
+                    .padding(.top, 1)
+                }
             }
 
             Spacer()
 
-            if isHovered {
+            if isHovered || showLabelPicker {
                 HStack(spacing: 2) {
+                    PanelIconButton(icon: "tag", help: "Labels") {
+                        showLabelPicker = true
+                    }
+                    .popover(isPresented: $showLabelPicker, arrowEdge: .trailing) {
+                        LabelPickerPopover(
+                            allLabels: allLabels,
+                            assignedIDs: Set(location.labelIDs),
+                            onToggle: onToggleLabel,
+                            onManage: {
+                                showLabelPicker = false
+                                onManageLabels()
+                            }
+                        )
+                    }
                     PanelIconButton(icon: "map", help: "Place on map", action: onApply)
                     PanelIconButton(icon: "pencil", help: "Rename", action: onRename)
                     PanelIconButton(icon: "trash", help: "Delete", color: .red, action: onDelete)
@@ -201,5 +344,72 @@ private struct LocationRow: View {
         .contentShape(Rectangle())
         .onHover { isHovered = $0 }
         .animation(.easeInOut(duration: 0.12), value: isHovered)
+    }
+}
+
+// MARK: - Label picker popover
+
+private struct LabelPickerPopover: View {
+    let allLabels: [LocationLabel]
+    let assignedIDs: Set<UUID>
+    let onToggle: (LocationLabel) -> Void
+    let onManage: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if allLabels.isEmpty {
+                VStack(spacing: 6) {
+                    Image(systemName: "tag")
+                        .font(.title3)
+                        .foregroundColor(PanelTheme.textTertiary)
+                    Text("No labels yet")
+                        .font(.caption)
+                        .foregroundColor(PanelTheme.textSecondary)
+                }
+                .frame(width: 200, height: 80)
+            } else {
+                ScrollView {
+                    VStack(spacing: 2) {
+                        ForEach(allLabels) { label in
+                            Button {
+                                onToggle(label)
+                            } label: {
+                                HStack(spacing: 8) {
+                                    Image(systemName: assignedIDs.contains(label.id) ? "checkmark.square.fill" : "square")
+                                        .foregroundColor(assignedIDs.contains(label.id) ? .accentColor : PanelTheme.textTertiary)
+                                        .font(.system(size: 12))
+                                    Text(label.name)
+                                        .font(.callout)
+                                        .foregroundColor(PanelTheme.textPrimary)
+                                    Spacer()
+                                }
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 5)
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .padding(.vertical, 6)
+                }
+                .frame(width: 220, height: min(CGFloat(allLabels.count) * 28 + 12, 240))
+            }
+            Divider()
+            Button(action: onManage) {
+                HStack(spacing: 6) {
+                    Image(systemName: "gearshape")
+                        .font(.system(size: 11))
+                    Text("Manage Labels…")
+                        .font(.callout)
+                    Spacer()
+                }
+                .foregroundColor(PanelTheme.textSecondary)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+        }
+        .background(PanelTheme.containerFill)
     }
 }

@@ -130,6 +130,7 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
     }()
 
     @Published var savedLocations: [Location] = []
+    @Published var locationLabels: [LocationLabel] = []
 
     /// Width (px) of the side panel currently covering the right edge of the
     /// map. Set by ContentView so that fly-to operations can offset the visible
@@ -756,11 +757,15 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
 
     func update(_ location: Location, with name: String) {
         guard let i = savedLocations.firstIndex(where: { $0.id == location.id }) else { return }
-        savedLocations.remove(at: i)
-        savedLocations.insert(
-            Location(name: name, latitude: location.latitude, longitude: location.longitude),
-            at: i
+        let existing = savedLocations[i]
+        var renamed = Location(
+            name: name,
+            latitude: existing.latitude,
+            longitude: existing.longitude,
+            labelIDs: existing.labelIDs
         )
+        renamed.id = existing.id
+        savedLocations[i] = renamed
         saveSavedLocations()
     }
 
@@ -779,6 +784,56 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
         let coord = CLLocationCoordinate2D(latitude: location.latitude, longitude: location.longitude)
         addLocation(coordinate: coord)
         centerVisibleOn(coord)
+    }
+
+    // MARK: - Location labels
+
+    @discardableResult
+    func addLocationLabel(name: String) -> LocationLabel? {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        guard !locationLabels.contains(where: { $0.name.caseInsensitiveCompare(trimmed) == .orderedSame }) else {
+            showAlert("Label \"\(trimmed)\" already exists")
+            return nil
+        }
+        let label = LocationLabel(name: trimmed)
+        locationLabels.append(label)
+        saveLocationLabels()
+        return label
+    }
+
+    func renameLocationLabel(_ label: LocationLabel, to name: String) {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        guard let i = locationLabels.firstIndex(where: { $0.id == label.id }) else { return }
+        if locationLabels.contains(where: { $0.id != label.id && $0.name.caseInsensitiveCompare(trimmed) == .orderedSame }) {
+            showAlert("Label \"\(trimmed)\" already exists")
+            return
+        }
+        locationLabels[i].name = trimmed
+        saveLocationLabels()
+    }
+
+    /// Deletes a label and strips its ID from every saved location.
+    func removeLocationLabel(_ label: LocationLabel) {
+        locationLabels.removeAll { $0.id == label.id }
+        var changed = false
+        for i in savedLocations.indices where savedLocations[i].labelIDs.contains(label.id) {
+            savedLocations[i].labelIDs.removeAll { $0 == label.id }
+            changed = true
+        }
+        saveLocationLabels()
+        if changed { saveSavedLocations() }
+    }
+
+    func toggleLabel(_ label: LocationLabel, on location: Location) {
+        guard let i = savedLocations.firstIndex(where: { $0.id == location.id }) else { return }
+        if savedLocations[i].labelIDs.contains(label.id) {
+            savedLocations[i].labelIDs.removeAll { $0 == label.id }
+        } else {
+            savedLocations[i].labelIDs.append(label.id)
+        }
+        saveSavedLocations()
     }
 
     // MARK: - Visible-area map centering
@@ -894,13 +949,23 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
     // MARK: - Private
 
     private func loadLocations() {
-        guard let data = defaults.data(forKey: Constants.defaultsSavedLocationsPathKey) else { return }
-        savedLocations = (try? JSONDecoder().decode([Location].self, from: data)) ?? []
+        if let data = defaults.data(forKey: Constants.defaultsSavedLocationsPathKey) {
+            savedLocations = (try? JSONDecoder().decode([Location].self, from: data)) ?? []
+        }
+        if let data = defaults.data(forKey: Constants.defaultsLocationLabelsKey) {
+            locationLabels = (try? JSONDecoder().decode([LocationLabel].self, from: data)) ?? []
+        }
     }
 
     private func saveSavedLocations() {
         if let data = try? JSONEncoder().encode(savedLocations) {
             defaults.set(data, forKey: Constants.defaultsSavedLocationsPathKey)
+        }
+    }
+
+    private func saveLocationLabels() {
+        if let data = try? JSONEncoder().encode(locationLabels) {
+            defaults.set(data, forKey: Constants.defaultsLocationLabelsKey)
         }
     }
 
@@ -1417,6 +1482,7 @@ extension CLLocation {
 
 private enum Constants {
     static let defaultsSavedLocationsPathKey = "saved_locations"
+    static let defaultsLocationLabelsKey = "location_labels"
     static let defaultsXcodePathKey = "xcode_path"
     static let developerModeInstructions = """
     Developer Mode needs to be enabled:
