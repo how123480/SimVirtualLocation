@@ -455,6 +455,52 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
         simulationStatus = .idle
     }
 
+    /// Freezes route playback at the puck's current position. Tracks,
+    /// currentTrackIndex, lastTrackLocation, currentPolyline, route overlay,
+    /// and the puck annotation are preserved so resume can pick up in place.
+    func pauseRouteSimulation() async {
+        let paused: SimulationStatus
+        switch simulationStatus {
+        case .route:    paused = .routePaused
+        case .fromAToB: paused = .fromAToBPaused
+        default:        return
+        }
+        pendingSpeedRegenTask?.cancel()
+        pendingSpeedRegenTask = nil
+        timer?.invalidate()
+        timer = nil
+        await gpxPlayback.stop()
+        simulationStatus = paused
+        let holdCoord = lastTrackLocation ?? currentSimulationAnnotation.coordinate
+        if CLLocationCoordinate2DIsValid(holdCoord) {
+            run(location: holdCoord)
+            lastRunnerUpdateTime = Date()
+        }
+        logger.info("Route simulation paused")
+    }
+
+    /// Resumes playback from the puck's current position. Restarts the local
+    /// movement timer, and on the GPX path regenerates the GPX from the
+    /// remaining polyline so pymobiledevice3 picks up where it left off.
+    func resumeRouteSimulation() {
+        let resumed: SimulationStatus
+        switch simulationStatus {
+        case .routePaused:    resumed = .route
+        case .fromAToBPaused: resumed = .fromAToB
+        default:              return
+        }
+        simulationStatus = resumed
+        lastRunnerUpdateTime = .distantPast
+        startMovementTimer()
+        if shouldUseGPXPlayback, let endpoint = currentGPXEndpoint() {
+            let remaining = remainingPolyline()
+            if remaining.count >= 2 {
+                startGPXPlayback(polyline: remaining, endpoint: endpoint, reason: "resume")
+            }
+        }
+        logger.info("Route simulation resumed")
+    }
+
     // MARK: Search
 
     func selectSearchCompletion(_ completion: MKLocalSearchCompletion) {
@@ -912,9 +958,13 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
 
     // MARK: - GPX Playback Orchestration
 
-    /// Whether currently running Route / A→B (used for A/B lock UI)
+    /// Whether currently running (or paused while running) Route / A→B.
+    /// Used to lock A/B annotations and gate the GPX speed-change handler.
     var isRouteSimulationActive: Bool {
-        simulationStatus == .route || simulationStatus == .fromAToB
+        switch simulationStatus {
+        case .route, .fromAToB, .routePaused, .fromAToBPaused: return true
+        default: return false
+        }
     }
 
     /// The transport to use for the currently selected device.

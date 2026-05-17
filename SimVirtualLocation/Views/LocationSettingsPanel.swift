@@ -26,8 +26,10 @@ struct LocationSettingsPanel: View {
     }
 
     private var isRouteActive: Bool {
-        locationController.simulationStatus == .route ||
-        locationController.simulationStatus == .fromAToB
+        switch locationController.simulationStatus {
+        case .route, .fromAToB, .routePaused, .fromAToBPaused: return true
+        default: return false
+        }
     }
 
     private var isStopping: Bool {
@@ -182,8 +184,18 @@ struct LocationSettingsPanel: View {
         VStack(alignment: .leading, spacing: 12) {
             // Action buttons on top
             VStack(spacing: 6) {
-                simulateRouteButton
-                atoBButton
+                HStack(spacing: 8) {
+                    simulateRouteButton
+                    if isRoutePauseVisible {
+                        pauseResumeIconButton(forFromAToB: false)
+                    }
+                }
+                HStack(spacing: 8) {
+                    atoBButton
+                    if isAtoBPauseVisible {
+                        pauseResumeIconButton(forFromAToB: true)
+                    }
+                }
             }
 
             Divider()
@@ -236,14 +248,16 @@ struct LocationSettingsPanel: View {
     // MARK: - Route action buttons
 
     private var simulateRouteButton: some View {
-        let isActive = locationController.simulationStatus == .route
+        let status = locationController.simulationStatus
+        let isActive = status == .route || status == .routePaused
         let stopping = isStopping && isActive
         let label = stopping ? "Stopping…" : isActive ? "Stop Route" : "Simulate Route"
         let style: PanelButton.Style = isActive ? .destructive : .prominent
         let action: () -> Void = isActive
             ? { Task { await locationController.stopSimulation() } }
             : { locationController.makeRoute(autoSimulate: true) }
-        let disabled = (locationController.simulationStatus == .fromAToB && !isActive) || stopping
+        let crossActive = status == .fromAToB || status == .fromAToBPaused
+        let disabled = (crossActive && !isActive) || stopping
         return PanelButton(
             title: label,
             style: style,
@@ -254,14 +268,16 @@ struct LocationSettingsPanel: View {
     }
 
     private var atoBButton: some View {
-        let isActive = locationController.simulationStatus == .fromAToB
+        let status = locationController.simulationStatus
+        let isActive = status == .fromAToB || status == .fromAToBPaused
         let stopping = isStopping && isActive
         let label = stopping ? "Stopping…" : isActive ? "Stop A→B" : "A→B Linear"
         let style: PanelButton.Style = isActive ? .destructive : .prominent
         let action: () -> Void = isActive
             ? { Task { await locationController.stopSimulation() } }
             : { locationController.simulateFromAToB() }
-        let disabled = (locationController.simulationStatus == .route && !isActive) || stopping
+        let crossActive = status == .route || status == .routePaused
+        let disabled = (crossActive && !isActive) || stopping
         return PanelButton(
             title: label,
             style: style,
@@ -269,5 +285,46 @@ struct LocationSettingsPanel: View {
             disabled: disabled,
             action: action
         )
+    }
+
+    // MARK: - Pause / Resume icon
+
+    private var isRoutePauseVisible: Bool {
+        let status = locationController.simulationStatus
+        return status == .route || status == .routePaused
+    }
+
+    private var isAtoBPauseVisible: Bool {
+        let status = locationController.simulationStatus
+        return status == .fromAToB || status == .fromAToBPaused
+    }
+
+    @ViewBuilder
+    private func pauseResumeIconButton(forFromAToB: Bool) -> some View {
+        let isPaused = locationController.simulationStatus.isPaused
+        let icon = isPaused ? "play.fill" : "pause.fill"
+        let tint: Color = isPaused ? .green : PanelTheme.textPrimary
+        let help = isPaused ? "Resume" : "Pause"
+        Button {
+            if isPaused {
+                locationController.resumeRouteSimulation()
+            } else {
+                Task { await locationController.pauseRouteSimulation() }
+            }
+        } label: {
+            Image(systemName: icon)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundColor(tint)
+                .frame(width: 30, height: 26)
+                .background(PanelTheme.buttonFill)
+                .clipShape(RoundedRectangle(cornerRadius: PanelTheme.radius, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: PanelTheme.radius, style: .continuous)
+                        .stroke(PanelTheme.separator, lineWidth: 0.5)
+                )
+        }
+        .buttonStyle(.plain)
+        .disabled(isStopping)
+        .help(help)
     }
 }

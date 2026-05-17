@@ -71,6 +71,10 @@ struct StatusPanel: View {
             return .init(pillLabel: "Simulating Route", color: .green)
         case .fromAToB:
             return .init(pillLabel: "Simulating A→B", color: .green)
+        case .routePaused:
+            return .init(pillLabel: "Route Paused", color: .orange, pulses: false)
+        case .fromAToBPaused:
+            return .init(pillLabel: "A→B Paused", color: .orange, pulses: false)
         case .stopping:
             return .init(
                 pillLabel: "Stopping…",

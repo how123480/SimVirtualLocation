@@ -50,39 +50,50 @@ enum DeviceStatus: Equatable {
 // MARK: - Simulation Status
 
 enum SimulationStatus: Equatable {
-    case idle      // Not simulating
-    case route     // Simulating along route
-    case fromAToB  // Simulating straight line from A to B
-    case mocking   // Fixed single point (location sent to device)
-    case stopping  // Async teardown in progress; button is greyed out
+    case idle             // Not simulating
+    case route            // Simulating along route
+    case fromAToB         // Simulating straight line from A to B
+    case routePaused      // Route simulation paused; puck frozen, device location held
+    case fromAToBPaused   // A→B simulation paused; puck frozen, device location held
+    case mocking          // Fixed single point (location sent to device)
+    case stopping         // Async teardown in progress; button is greyed out
 
     var displayText: String {
         switch self {
-        case .idle:     return "Not simulating"
-        case .route:    return "Stop route simulation"
-        case .fromAToB: return "Stop A→B simulation"
-        case .mocking:  return "Mocking"
-        case .stopping: return "Stopping…"
+        case .idle:           return "Not simulating"
+        case .route:          return "Stop route simulation"
+        case .fromAToB:       return "Stop A→B simulation"
+        case .routePaused:    return "Route paused"
+        case .fromAToBPaused: return "A→B paused"
+        case .mocking:        return "Mocking"
+        case .stopping:       return "Stopping…"
         }
     }
 
     /// String for the "Start" button
     var startButtonText: String {
         switch self {
-        case .idle, .mocking: return "Simulate Route"
-        case .route:          return "Stop Simulation"
-        case .fromAToB:       return "Stop A→B Simulation"
-        case .stopping:       return "Stopping…"
+        case .idle, .mocking:              return "Simulate Route"
+        case .route, .routePaused:         return "Stop Simulation"
+        case .fromAToB, .fromAToBPaused:   return "Stop A→B Simulation"
+        case .stopping:                    return "Stopping…"
         }
     }
 
-    /// Whether location is being continuously changed.
-    /// .stopping is NOT mocking-active — this is what makes the idempotent
-    /// guard in stopSimulation() work (a second call early-returns).
+    /// Whether the simulation owns the device's location (so stopSimulation
+    /// should run, joystick overrides apply, etc.). Paused states still own
+    /// the location — the device sits at the last fix until stopped or resumed.
+    /// .stopping is NOT mocking-active so the idempotent guard in
+    /// stopSimulation() works (a second call early-returns).
     var isMockingActive: Bool {
         switch self {
-        case .route, .fromAToB, .mocking: return true
-        case .idle, .stopping:            return false
+        case .route, .fromAToB, .routePaused, .fromAToBPaused, .mocking: return true
+        case .idle, .stopping:                                           return false
         }
+    }
+
+    /// True for paused-route states; UI uses this to flip pause↔resume icons.
+    var isPaused: Bool {
+        self == .routePaused || self == .fromAToBPaused
     }
 }
