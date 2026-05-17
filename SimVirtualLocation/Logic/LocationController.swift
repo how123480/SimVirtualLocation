@@ -90,7 +90,9 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
     @Published var isEmulator: Bool = false
 
     /// Device connection status (replaces original isDeviceActive + tunnelStatus strings)
-    @Published var deviceStatus: DeviceStatus = .idle
+    @Published var deviceStatus: DeviceStatus = .idle {
+        didSet { handleDeviceStatusChange(oldValue: oldValue) }
+    }
 
     /// Compatibility fields: Existing UI dependency on isDeviceActive / tunnelStatus
     var isDeviceActive: Bool { deviceStatus.isActive }
@@ -174,6 +176,12 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
     private var joystickDebounceTimer: Timer?
     private var joystickMovementTimer: Timer?
     private var activeKeys: Set<UInt16> = []
+
+    // Health check (iOS physical device only)
+    private var healthCheckTimer: Timer?
+    private var healthCheckFailureStreak: Int = 0
+    private static let healthCheckInterval: TimeInterval = 10.0
+    private static let healthCheckFailureThreshold = 2
 
     // MARK: - Init
 
@@ -961,6 +969,91 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
         if let data = try? JSONEncoder().encode(savedLocations) {
             defaults.set(data, forKey: Constants.defaultsSavedLocationsPathKey)
         }
+    }
+
+    // MARK: - Device health check
+
+    /// Reacts to deviceStatus transitions: start the liveness probe when the
+    /// device becomes ready, stop it when it leaves ready (manual disconnect,
+    /// error, or our own disconnect handler).
+    private func handleDeviceStatusChange(oldValue: DeviceStatus) {
+        if deviceStatus.isReady && !oldValue.isReady {
+            startHealthCheckTimer()
+        } else if !deviceStatus.isReady && oldValue.isReady {
+            stopHealthCheckTimer()
+        }
+    }
+
+    private func startHealthCheckTimer() {
+        healthCheckTimer?.invalidate()
+        healthCheckFailureStreak = 0
+        logger.info("Device health check started (every \(Int(Self.healthCheckInterval))s)")
+        healthCheckTimer = Timer.scheduledTimer(
+            withTimeInterval: Self.healthCheckInterval,
+            repeats: true
+        ) { [weak self] _ in
+            Task { @MainActor in
+                await self?.performHealthCheck()
+            }
+        }
+    }
+
+    private func stopHealthCheckTimer() {
+        guard healthCheckTimer != nil else { return }
+        healthCheckTimer?.invalidate()
+        healthCheckTimer = nil
+        healthCheckFailureStreak = 0
+        logger.info("Device health check stopped")
+    }
+
+    private func performHealthCheck() async {
+        guard deviceType == 0,
+              deviceMode == .device,
+              deviceStatus.isReady,
+              !selectedDevice.isEmpty else {
+            return
+        }
+        let snapshot = selectedDevice
+        let devices: [Device]
+        do {
+            devices = try await client.listDevices()
+        } catch {
+            guard selectedDevice == snapshot, deviceStatus.isReady else { return }
+            healthCheckFailureStreak += 1
+            logger.warn("Health check listDevices failed (\(healthCheckFailureStreak)/\(Self.healthCheckFailureThreshold)): \(error.localizedDescription)")
+            if healthCheckFailureStreak >= Self.healthCheckFailureThreshold {
+                await handleDeviceDisconnection(udid: snapshot)
+            }
+            return
+        }
+        guard selectedDevice == snapshot, deviceStatus.isReady else { return }
+
+        if devices.contains(where: { $0.id == snapshot }) {
+            healthCheckFailureStreak = 0
+        } else {
+            healthCheckFailureStreak += 1
+            logger.warn("Health check: device \(snapshot) missing (\(healthCheckFailureStreak)/\(Self.healthCheckFailureThreshold))")
+            if healthCheckFailureStreak >= Self.healthCheckFailureThreshold {
+                await handleDeviceDisconnection(udid: snapshot)
+            }
+        }
+    }
+
+    /// Tears down any active simulation, drops the device from the picker,
+    /// resets status to idle, and alerts the user. Setting deviceStatus to
+    /// .idle also triggers stopHealthCheckTimer via the didSet hook.
+    private func handleDeviceDisconnection(udid: String) async {
+        logger.error("Device \(udid) disconnected — health check exceeded failure threshold")
+        if simulationStatus.isMockingActive {
+            await stopSimulation(clearAnnotations: false)
+        }
+        connectedDevices.removeAll { $0.id == udid }
+        selectedDevice = connectedDevices.first?.id ?? ""
+        deviceStatus = .idle
+        Task { @MainActor in
+            await refreshDevices()
+        }
+        showAlert("iOS device disconnected. Check the USB cable or network connection, then reconnect.")
     }
 
     private func saveLocationLabels() {
