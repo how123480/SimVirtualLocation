@@ -1045,7 +1045,12 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
     private func handleDeviceDisconnection(udid: String) async {
         logger.error("Device \(udid) disconnected — health check exceeded failure threshold")
         if simulationStatus.isMockingActive {
-            await stopSimulation(clearAnnotations: false)
+            await stopSimulation(clearAnnotations: true)
+        } else {
+            mapView.mkMapView.removeAnnotations(mapView.mkMapView.annotations)
+            mapView.mkMapView.removeOverlays(mapView.mkMapView.overlays)
+            annotations = []
+            route = nil
         }
         connectedDevices.removeAll { $0.id == udid }
         selectedDevice = connectedDevices.first?.id ?? ""
