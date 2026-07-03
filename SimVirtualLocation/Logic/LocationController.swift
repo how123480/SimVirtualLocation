@@ -1042,7 +1042,25 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
         guard selectedDevice == snapshot, deviceStatus.isReady else { return }
 
         if devices.contains(where: { $0.id == snapshot }) {
-            healthCheckFailureStreak = 0
+            if useRSD {
+                // USB presence isn't enough on the RSD path — usbmux answers
+                // even when the tunnel is dead. Check the tunnel itself so
+                // lock/sleep/tunneld-crash drops are caught here, not on the
+                // user's next command.
+                let tunnelAlive = await client.verifyTunnel(udid: snapshot)
+                guard selectedDevice == snapshot, deviceStatus.isReady else { return }
+                if tunnelAlive {
+                    healthCheckFailureStreak = 0
+                } else {
+                    healthCheckFailureStreak += 1
+                    logger.warn("Health check: tunnel for device missing (\(healthCheckFailureStreak)/\(Self.healthCheckFailureThreshold))")
+                    if healthCheckFailureStreak >= Self.healthCheckFailureThreshold {
+                        await attemptRecoveryOrDisconnect(udid: snapshot)
+                    }
+                }
+            } else {
+                healthCheckFailureStreak = 0
+            }
         } else {
             healthCheckFailureStreak += 1
             logger.warn("Health check: device \(snapshot) missing (\(healthCheckFailureStreak)/\(Self.healthCheckFailureThreshold))")
