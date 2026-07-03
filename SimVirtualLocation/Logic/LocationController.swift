@@ -144,6 +144,7 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
     private let mapView: MapView
     private let runner = Runner()
     private let client = MobileDeviceClient()
+    private lazy var recovery = TunnelRecoveryCoordinator(client: client)
     private lazy var gpxPlayback = GPXPlayback(client: client)
     private let currentSimulationAnnotation = MKPointAnnotation()
     private let locationManager = CLLocationManager()
@@ -1022,7 +1023,7 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
             healthCheckFailureStreak += 1
             logger.warn("Health check listDevices failed (\(healthCheckFailureStreak)/\(Self.healthCheckFailureThreshold)): \(error.localizedDescription)")
             if healthCheckFailureStreak >= Self.healthCheckFailureThreshold {
-                await handleDeviceDisconnection(udid: snapshot)
+                await attemptRecoveryOrDisconnect(udid: snapshot)
             }
             return
         }
@@ -1034,7 +1035,7 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
             healthCheckFailureStreak += 1
             logger.warn("Health check: device \(snapshot) missing (\(healthCheckFailureStreak)/\(Self.healthCheckFailureThreshold))")
             if healthCheckFailureStreak >= Self.healthCheckFailureThreshold {
-                await handleDeviceDisconnection(udid: snapshot)
+                await attemptRecoveryOrDisconnect(udid: snapshot)
             }
         }
     }
@@ -1042,8 +1043,56 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
     /// Tears down any active simulation, drops the device from the picker,
     /// resets status to idle, and alerts the user. Setting deviceStatus to
     /// .idle also triggers stopHealthCheckTimer via the didSet hook.
+    /// Health-check entry point: try a silent tunnel recovery before tearing
+    /// the device down. On success, reset the failure streak and (if a route
+    /// was playing) restart GPX playback from the puck's current position,
+    /// since the long-running `play` process dies when the tunnel drops.
+    private func attemptRecoveryOrDisconnect(udid: String) async {
+        if await attemptTunnelRecovery() {
+            healthCheckFailureStreak = 0
+            restartGPXPlaybackAfterRecoveryIfNeeded()
+        } else {
+            await handleDeviceDisconnection(udid: udid)
+        }
+    }
+
+    /// Flips the device into `.reconnecting` and runs the recovery ladder.
+    /// Returns true if the tunnel is live again. Only meaningful for the iOS
+    /// physical-device RSD path; other modes can't lose a tunnel.
+    private func attemptTunnelRecovery() async -> Bool {
+        let udid = selectedDevice
+        guard deviceType == 0, deviceMode == .device, useRSD, !udid.isEmpty else {
+            return false
+        }
+        deviceStatus = .reconnecting
+        let result = await recovery.recover(udid: udid)
+        // The device may have been swapped out from under us while we awaited.
+        guard selectedDevice == udid else { return result == .recovered }
+        switch result {
+        case .recovered:
+            deviceStatus = .connected
+            logger.info("Tunnel recovered for \(udid)")
+            return true
+        case .failed:
+            return false
+        }
+    }
+
+    /// Restarts GPX playback after a recovered tunnel, continuing from the
+    /// current position rather than restarting the route from Point A.
+    private func restartGPXPlaybackAfterRecoveryIfNeeded() {
+        guard isRouteSimulationActive, shouldUseGPXPlayback,
+              let endpoint = currentGPXEndpoint() else { return }
+        let remaining = remainingPolyline()
+        guard remaining.count >= 2 else { return }
+        startGPXPlayback(polyline: remaining, endpoint: endpoint, reason: "recovery")
+    }
+
     private func handleDeviceDisconnection(udid: String) async {
-        logger.error("Device \(udid) disconnected — health check exceeded failure threshold")
+        // Idempotent: inline and health-check paths may both reach here for the
+        // same drop. Once we've reset to idle, don't tear down (and re-alert) again.
+        guard deviceStatus != .idle else { return }
+        logger.error("Device \(udid) disconnected — tunnel recovery failed")
         if simulationStatus.isMockingActive {
             await stopSimulation(clearAnnotations: true)
         } else {
@@ -1340,6 +1389,15 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
                     guard let self else { return }
                     do {
                         try await self.client.setLocation(location, transport: .rsd(udid: self.selectedDevice))
+                    } catch let e where (e as? AppError)?.isTunnelDrop == true {
+                        // Tunnel dropped mid-send — try to recover silently and
+                        // re-send this fix once, rather than aborting the user.
+                        if await self.attemptTunnelRecovery() {
+                            try? await self.client.setLocation(location, transport: .rsd(udid: self.selectedDevice))
+                        } else {
+                            if self.simulationStatus == .mocking { self.simulationStatus = .idle }
+                            await self.handleDeviceDisconnection(udid: self.selectedDevice)
+                        }
                     } catch {
                         if self.simulationStatus == .mocking { self.simulationStatus = .idle }
                         self.errorHandler.handle(error)
