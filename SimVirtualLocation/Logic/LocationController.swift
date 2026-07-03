@@ -40,7 +40,6 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
     // MARK: - Publishers
 
     // Feature switches
-    @Published var showAndroidOption: Bool = false
     @Published var showSimulatorOption: Bool = false
 
     /// Simulation status (replaces the scattered isSimulating + simulationType strings)
@@ -84,10 +83,6 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
 
     @Published var showingAlert: Bool = false
     @Published var isShowingDialog: Bool = false
-    @Published var deviceType: Int = 0
-    @Published var adbPath: String = ""
-    @Published var adbDeviceId: String = ""
-    @Published var isEmulator: Bool = false
 
     /// Device connection status (replaces original isDeviceActive + tunnelStatus strings)
     @Published var deviceStatus: DeviceStatus = .idle {
@@ -100,7 +95,7 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
 
     /// Whether location commands can be sent
     var isDeviceReady: Bool {
-        if deviceType == 0 && deviceMode == .device {
+        if deviceMode == .device {
             return deviceStatus.isReady
         }
         return true
@@ -236,10 +231,6 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
         Task { @MainActor in
             await refreshDevices()
 
-            deviceType = defaults.integer(forKey: "device_type")
-            adbPath = defaults.string(forKey: "adb_path") ?? ""
-            adbDeviceId = defaults.string(forKey: "adb_device_id") ?? ""
-            isEmulator = defaults.bool(forKey: "is_emulator")
             xcodePath = defaults.string(forKey: Constants.defaultsXcodePathKey) ?? "/Applications/Xcode.app"
 
             loadLocations()
@@ -408,41 +399,6 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
         isMapCentered = true
         mapView.mkMapView.showsUserLocation = true
         centerVisibleOn(location.coordinate)
-    }
-
-    // MARK: Android
-
-    func prepareEmulator() {
-        guard ensureAdbAvailable() else { return }
-        Task { @MainActor [weak self] in
-            guard let self else { return }
-            await self.executeAdbCommand(args: ["shell", "settings", "put", "secure", "location_providers_allowed", "+gps"])
-            await self.executeAdbCommand(
-                args: ["shell", "settings", "put", "secure", "location_providers_allowed", "+network"],
-                successMessage: "Emulator is ready"
-            )
-        }
-    }
-
-    func installHelperApp() {
-        guard ensureAdbAvailable() else { return }
-        guard let apkPath = Bundle.main.url(forResource: "helper-app", withExtension: "apk")?.path else {
-            showAlert("helper-app.apk is missing from the app bundle")
-            return
-        }
-        Task { @MainActor [weak self] in
-            guard let self else { return }
-            await self.executeAdbCommand(
-                args: ["-s", self.adbDeviceId, "install", apkPath],
-                successMessage: "Helper App installation complete, please open and authorize on your phone"
-            )
-        }
-    }
-
-    private func ensureAdbAvailable() -> Bool {
-        if adbDeviceId.isEmpty { showAlert("Android device ID"); return false }
-        if adbPath.isEmpty { showAlert("adb path"); return false }
-        return true
     }
 
     // MARK: Simulation control
@@ -1065,8 +1021,7 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
     }
 
     private func performHealthCheck() async {
-        guard deviceType == 0,
-              deviceMode == .device,
+        guard deviceMode == .device,
               deviceStatus.isReady,
               !selectedDevice.isEmpty else {
             return
@@ -1136,7 +1091,7 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
     /// physical-device RSD path; other modes can't lose a tunnel.
     private func attemptTunnelRecovery() async -> Bool {
         let udid = selectedDevice
-        guard deviceType == 0, deviceMode == .device, useRSD, !udid.isEmpty else {
+        guard deviceMode == .device, useRSD, !udid.isEmpty else {
             return false
         }
         deviceStatus = .reconnecting
@@ -1290,15 +1245,15 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
     }
 
     /// The transport to use for the currently selected device.
-    /// Returns nil for non-iOS-device modes (Simulator / Android).
+    /// Returns nil for non-iOS-device modes (Simulator).
     private func currentTransport() -> MobileDeviceClient.Transport? {
-        guard deviceType == 0, deviceMode == .device, !selectedDevice.isEmpty else { return nil }
+        guard deviceMode == .device, !selectedDevice.isEmpty else { return nil }
         return useRSD ? .rsd(udid: selectedDevice) : .legacy(udid: selectedDevice)
     }
 
     /// Whether the current conditions allow for GPX path: iOS physical device + RSD/legacy both supported
     private var shouldUseGPXPlayback: Bool {
-         deviceType == 0 && deviceMode == .device && isDeviceReady
+         deviceMode == .device && isDeviceReady
     }
 
     /// Based on current useRSD setting, returns GPXPlayback.Endpoint
@@ -1390,23 +1345,6 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
         return pts
     }
 
-    private func executeAdbCommand(args: [String], successMessage: String? = nil) async {
-        guard ensureAdbAvailable() else { return }
-        do {
-            // `adb install` of the bundled helper APK can take a while on a
-            // slow device, hence the generous timeout.
-            let result = try await ProcessRunner.execute(executable: adbPath, args: args, timeout: 120)
-            let err = String(decoding: result.stderr, as: UTF8.self)
-            if !err.isEmpty {
-                showAlert(err)
-            } else if let msg = successMessage {
-                showAlert(msg)
-            }
-        } catch {
-            showAlert(error.localizedDescription)
-        }
-    }
-
     private func printTimes() {
         tracksTimes.forEach { track, time in
             let distance = CLLocation.distance(from: track.startPoint.coordinate, to: track.endPoint.coordinate)
@@ -1462,40 +1400,11 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
 
     /// Send location command to the corresponding device
     private func run(location: CLLocationCoordinate2D) {
-        // Persist user input
-        defaults.set(deviceType, forKey: "device_type")
-        defaults.set(adbPath, forKey: "adb_path")
-        defaults.set(adbDeviceId, forKey: "adb_device_id")
-        defaults.set(isEmulator, forKey: "is_emulator")
-
         currentRunTask?.cancel()
         // Flip UI to "mocking" immediately so the Apply→Stop toggle feels
         // instantaneous. The async device call below may take hundreds of ms.
         // On failure, the catch branches revert to .idle.
         if simulationStatus == .idle { simulationStatus = .mocking }
-        let weakAlert: (String) -> Void = { [weak self] msg in
-            Task { @MainActor in self?.showAlert(msg) }
-        }
-
-        // Android
-        if deviceType != 0 {
-            currentRunTask = Task { [weak self] in
-                guard let self, !Task.isCancelled else { return }
-                guard self.ensureAdbAvailable() else {
-                    if self.simulationStatus == .mocking { self.simulationStatus = .idle }
-                    return
-                }
-                self.logger.debug("Android location: deviceId=\(self.adbDeviceId), isEmulator=\(self.isEmulator)")
-                await self.runner.runOnAndroid(
-                    location: location,
-                    adbDeviceId: self.adbDeviceId,
-                    adbPath: self.adbPath,
-                    isEmulator: self.isEmulator,
-                    showAlert: weakAlert
-                )
-            }
-            return
-        }
 
         // iOS Device
         if deviceMode == .device {

@@ -13,7 +13,6 @@ enum AppError: Error {
 
     // MARK: Tooling
     case pymobiledevice3NotInstalled
-    case adbNotConfigured
 
     // MARK: Tunneld
     case tunneldAuthorizationCancelled
@@ -69,8 +68,6 @@ extension AppError {
         switch self {
         case .pymobiledevice3NotInstalled:
             return "Could not find pymobiledevice3, please install it and retry (pip install pymobiledevice3)"
-        case .adbNotConfigured:
-            return "ADB path or device ID is not set"
         case .tunneldAuthorizationCancelled:
             return "Tunnel authorization cancelled"
         case .tunneldAuthorizationFailed(let m):

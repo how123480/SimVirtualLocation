@@ -24,14 +24,14 @@ No test suite currently exists (`ENABLE_TESTABILITY = YES` is set but unused).
 
 ## Architecture
 
-SwiftUI macOS app (11+) for spoofing iOS/Android device GPS. External tools do the heavy lifting — the app is an orchestration layer.
+SwiftUI macOS app (11+) for spoofing iOS device GPS. External tools do the heavy lifting — the app is an orchestration layer.
 
 **Source layout:** `SimVirtualLocation/{Logic,Models,Views}/`
 
 ### Key components
 
 - **`LocationController`** (`Logic/LocationController.swift`) — `@MainActor ObservableObject`. Central coordinator: owns device/simulation state, drives `Runner` and `GPXPlayback`, manages the `MKMapView` delegate, and handles `CLLocationManagerDelegate` callbacks. All `@Published` UI state lives here.
-- **`Runner`** (`Logic/Runner.swift`) — `async/await` wrapper around `Process`. Runs `xcrun simctl`, `pymobiledevice3`, and `adb`. Provides both one-shot `set` calls and long-running `play` calls for GPX.
+- **`Runner`** (`Logic/Runner.swift`) — `async/await` wrapper around `Process`. Runs `xcrun simctl` and `pymobiledevice3`. Provides both one-shot `set` calls and long-running `play` calls for GPX.
 - **`GPXGenerator` / `GPXPlayback`** (`Logic/GPXGenerator.swift`) — `GPXGenerator` converts a polyline + speed (km/h) into a GPX 1.1 file sampled at 1 trkpt/s, written to `~/Library/Application Support/SimVirtualLocation/routes/` (max 50 files). `GPXPlayback` is a `@MainActor` lifecycle wrapper around `pymobiledevice3 ... simulate-location play`; `start(...)` cancels any in-flight process before launching a new one.
 - **`AppLogger`** (`Logic/Logger.swift`) — singleton; all log calls must go through `.debug/info/warn/error`. **Never use `print()`**. Sanitizes home dir, UDIDs, UUIDs, and IPv6 link-local addresses before writing to `~/Library/Logs/SimVirtualLocation/app.log` (1 MB × 5 rotations).
 - **`MapView`** (`Views/MapView.swift`) — `NSViewRepresentable` wrapper for `MKMapView`.
@@ -50,7 +50,7 @@ SwiftUI macOS app (11+) for spoofing iOS/Android device GPS. External tools do t
 2. `kickoffGPXPlaybackIfNeeded()` → `GPXGenerator.render(...)` writes the file → `GPXPlayback.start(...)` launches `pymobiledevice3 ... simulate-location play`.
 3. The local 0.1 s movement timer skips `run(location:)` while `shouldUseGPXPlayback` is true (device path) so the play process and the per-tick sender never double-drive the device. If the play process dies unexpectedly, `GPXPlayback.onUnexpectedExit` → `handleGPXPlaybackUnexpectedExit()` recovers the tunnel if needed and restarts playback from the puck's current position (max 3 consecutive restarts).
 4. Speed slider changes trigger a 0.4 s debounce → `remainingPolyline()` from the puck's current position → new GPX written → old process SIGTERMed → new process started. The puck does not jump back to A.
-5. iOS Simulator and Android use per-tick `set` calls instead (no GPX equivalent).
+5. iOS Simulator uses per-tick `set` calls instead (no GPX equivalent).
 
 ## Critical Code Rules
 
@@ -116,11 +116,10 @@ cp ../../SimVirtualLocation.xcodeproj/project.pbxproj SimVirtualLocation.xcodepr
 |------|----------|--------------|
 | `pymobiledevice3` | iOS physical device commands | Auto-detected in `~/Library/Python/` |
 | `xcrun simctl` | iOS Simulator | Built into macOS |
-| `adb` | Android | User-specified path in settings |
 
 Setup: `./scripts/setup.sh` installs `uv` and `pymobiledevice3`.
 Check environment: `./scripts/check-env.sh`.
 
 ## UserDefaults Keys
 
-`device_type` (0=iOS, 1=Android), `adb_path`, `adb_device_id`, `is_emulator`, `xcode_path`, `saved_locations` (JSON).
+`xcode_path`, `saved_locations` (JSON).

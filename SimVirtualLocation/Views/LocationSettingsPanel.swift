@@ -14,13 +14,11 @@ struct LocationSettingsPanel: View {
     // MARK: - Derived state
 
     private var shouldDisableControls: Bool {
-        locationController.deviceType == 0 &&
         locationController.deviceMode == .device &&
         !locationController.deviceStatus.isReady
     }
 
     private var isGPXPath: Bool {
-        locationController.deviceType == 0 &&
         locationController.deviceMode == .device &&
         locationController.deviceStatus.isReady
     }

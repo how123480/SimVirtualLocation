@@ -113,9 +113,6 @@ if [[ $issues_count -eq 0 ]]; then
     echo -e "${BLUE}Optional (for iOS 17+ devices):${NC}"
     echo "  Run: ${YELLOW}sudo pymobiledevice3 remote start-tunnel${NC}"
     echo ""
-    echo -e "${BLUE}Optional (for Android support):${NC}"
-    echo "  Install Android Studio and configure ADB path in app settings"
-    echo ""
     exit 0
 else
     echo -e "${RED}✗ Found $issues_count issue(s)${NC}"

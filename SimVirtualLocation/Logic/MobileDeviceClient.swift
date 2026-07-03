@@ -586,7 +586,7 @@ struct ProcessRunner {
         return try await Self.execute(executable: path, args: args, timeout: timeout)
     }
 
-    /// Generic one-shot executor for ANY executable (adb, xcrun, pgrep, ...).
+    /// Generic one-shot executor for ANY executable (xcrun, pgrep, ...).
     /// - The termination handler is installed BEFORE launch so a fast-exiting
     ///   process can never terminate before the handler exists (which would
     ///   leave the await hanging forever).

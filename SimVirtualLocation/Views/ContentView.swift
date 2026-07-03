@@ -241,27 +241,9 @@ struct ContentView: View {
                             HStack(alignment: .top, spacing: 0) {
                                 // Control Panel
                                 VStack(spacing: 0) {
-                                    if locationController.showAndroidOption {
-                                        Picker("Device mode", selection: $locationController.deviceType) {
-                                            Text("iOS").tag(0)
-                                            Text("Android").tag(1)
-                                        }
-                                        .labelsHidden()
-                                        .pickerStyle(.segmented)
-                                        .padding(.vertical, 14)
-
-                                        PanelDivider()
-                                    }
-
-                                    if locationController.deviceType == 0 {
-                                        iOSPanel()
-                                            .environmentObject(locationController)
-                                            .frame(maxHeight: .infinity)
-                                    } else {
-                                        AndroidPanel()
-                                            .environmentObject(locationController)
-                                            .frame(maxHeight: .infinity)
-                                    }
+                                    iOSPanel()
+                                        .environmentObject(locationController)
+                                        .frame(maxHeight: .infinity)
 
                                     PanelDivider()
 
