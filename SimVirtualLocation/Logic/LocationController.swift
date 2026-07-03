@@ -692,6 +692,19 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
             self.deviceStatus = .waitingAuthorization
             try await client.ensureTunneldRunning(allowLaunch: true)
             self.deviceStatus = .connected
+            let udid = selectedDevice
+            if !udid.isEmpty {
+                Task { [weak self] in
+                    guard let self else { return }
+                    await self.client.warmUpLocationHelper(udid: udid)
+                    // The user may have disconnected (or switched devices)
+                    // while the warm-up was connecting — don't leave an
+                    // orphaned helper bound to a dead tunnel.
+                    if !self.deviceStatus.isReady || self.selectedDevice != udid {
+                        await self.client.shutdownLocationHelper()
+                    }
+                }
+            }
         } catch {
             self.deviceStatus = .idle
             errorHandler.handle(error)
@@ -740,6 +753,7 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
                 errorHandler.handle(error)
             }
         }
+        await client.shutdownLocationHelper()
         await client.killResidualSimulationProcesses()
 
         mapView.mkMapView.removeAnnotations(mapView.mkMapView.annotations)
@@ -1113,6 +1127,7 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
         guard selectedDevice == udid else { return result == .recovered }
         switch result {
         case .recovered:
+            await client.shutdownLocationHelper()
             deviceStatus = .connected
             logger.info("Tunnel recovered for \(udid)")
             return true
@@ -1169,6 +1184,7 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
         // same drop. Once we've reset to idle, don't tear down (and re-alert) again.
         guard deviceStatus != .idle else { return }
         logger.error("Device \(udid) disconnected — tunnel recovery failed")
+        await client.shutdownLocationHelper()
         if simulationStatus.isMockingActive {
             await stopSimulation(clearAnnotations: true)
         } else {

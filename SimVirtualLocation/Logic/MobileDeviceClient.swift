@@ -160,6 +160,13 @@ final class MobileDeviceClient: ObservableObject {
 
         case .rsd:
             try await ensureTunneldRunning()
+            if await helperSetOrClear(coord, udid: transport.udid) {
+                // Helper owns the location now; drop any CLI set-holder so
+                // two DVT sources don't fight over the device.
+                await currentLocationSetHandle?.stop()
+                currentLocationSetHandle = nil
+                return
+            }
             locationSetGeneration += 1
             let generation = locationSetGeneration
 
@@ -191,6 +198,7 @@ final class MobileDeviceClient: ObservableObject {
         currentLocationSetHandle = nil
         if case .rsd = transport {
             try await ensureTunneldRunning()
+            if await helperSetOrClear(nil, udid: transport.udid) { return }
         }
         let args = locationClearArgs(transport)
         let result = try await processRunner.run(args: args, timeout: 15)
@@ -214,12 +222,83 @@ final class MobileDeviceClient: ObservableObject {
         currentLongRunning = nil
         await currentLocationSetHandle?.stop()
         currentLocationSetHandle = nil
+        helperClient.forgetLastSetCoordinate()
 
         let args = locationPlayArgs(url, transport: transport)
         let handle = try processRunner.runDiscardingOutput(args: args, onTermination: onTermination)
         currentLongRunning = handle
         logger.info("Started GPX playback: \(url.lastPathComponent), transport=\(transport.label)")
         return handle
+    }
+
+    // MARK: - Location helper (persistent set/clear for RSD)
+
+    private lazy var helperClient = LocationHelperClient()
+    /// Sticky for the app run: the installed pymobiledevice3 can't host the
+    /// helper, so RSD set/clear use the one-shot CLI path instead.
+    private var helperUnsupported = false
+    /// After a failed helper start, don't retry before this instant — a
+    /// persistently failing spawn must not tax every joystick tick ~2 s.
+    private var helperStartCooldownUntil: Date = .distantPast
+
+    /// Tries the persistent helper for an RSD set (coord != nil) or clear
+    /// (coord == nil). Returns false when the caller should fall back to the
+    /// one-shot CLI.
+    private func helperSetOrClear(_ coord: CLLocationCoordinate2D?, udid: String) async -> Bool {
+        guard !helperUnsupported else { return false }
+        if helperClient.isRunning, helperClient.servedUDID != udid {
+            // The helper is bound to a different device (picker switch
+            // without a stop) — never route commands to the wrong phone.
+            await helperClient.shutdown()
+        }
+        do {
+            if !helperClient.isRunning {
+                guard Date() >= helperStartCooldownUntil else { return false }
+                do {
+                    let path = try processRunner.locatePymobiledevice3()
+                    try await helperClient.start(udid: udid, pymobiledevice3Path: path)
+                } catch LocationHelperClient.HelperError.unsupported(let message) {
+                    helperUnsupported = true
+                    logger.warn("Location helper unsupported, using CLI fallback: \(message)")
+                    return false
+                } catch {
+                    helperStartCooldownUntil = Date().addingTimeInterval(30)
+                    logger.warn("Location helper start failed (cooldown 30 s): \(error.localizedDescription)")
+                    return false
+                }
+            }
+            if let coord {
+                try await helperClient.set(coord)
+            } else {
+                try await helperClient.clear()
+            }
+            return true
+        } catch LocationHelperClient.HelperError.unsupported(let message) {
+            helperUnsupported = true
+            logger.warn("Location helper unsupported, using CLI fallback: \(message)")
+            return false
+        } catch {
+            logger.warn("Location helper failed, using CLI fallback: \(error.localizedDescription)")
+            return false
+        }
+    }
+
+    /// Starts the helper in advance so the first Apply/clear doesn't pay the
+    /// ~2-4 s Python + DVT startup. Best-effort; errors only log.
+    func warmUpLocationHelper(udid: String) async {
+        guard !helperUnsupported else { return }
+        helperStartCooldownUntil = .distantPast
+        if helperClient.isRunning {
+            guard helperClient.servedUDID != udid else { return }
+            await helperClient.shutdown()
+        }
+        // A clear on a fresh connection is a harmless no-op; it exists purely
+        // to establish the DVT session so the first real command is instant.
+        _ = await helperSetOrClear(nil, udid: udid)
+    }
+
+    func shutdownLocationHelper() async {
+        await helperClient.shutdown()
     }
 
     // MARK: - Argument builders
