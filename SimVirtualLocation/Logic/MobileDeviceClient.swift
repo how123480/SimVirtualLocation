@@ -148,7 +148,11 @@ final class MobileDeviceClient: ObservableObject {
 
     /// Plays GPX in the background. Returns a handle the caller stores.
     /// Calling stop() on the handle SIGTERMs the underlying process.
-    func playGPX(_ url: URL, transport: Transport) async throws -> ProcessRunner.LongRunningHandle {
+    func playGPX(
+        _ url: URL,
+        transport: Transport,
+        onTermination: ((Int32) -> Void)? = nil
+    ) async throws -> ProcessRunner.LongRunningHandle {
         if case .rsd = transport {
             try await ensureTunneldRunning()
         }
@@ -157,7 +161,7 @@ final class MobileDeviceClient: ObservableObject {
         currentLongRunning = nil
 
         let args = locationPlayArgs(url, transport: transport)
-        let handle = try processRunner.runDiscardingOutput(args: args)
+        let handle = try processRunner.runDiscardingOutput(args: args, onTermination: onTermination)
         currentLongRunning = handle
         logger.info("Started GPX playback: \(url.lastPathComponent), transport=\(transport.label)")
         return handle
@@ -323,6 +327,12 @@ struct ProcessRunner {
 
     final class LongRunningHandle {
         let task: Process
+
+        /// Set at the top of stop() — before any signalling — so a termination
+        /// callback that fires during teardown can tell a deliberate stop from
+        /// an unexpected death. Written and read on the main actor only.
+        private(set) var wasStoppedIntentionally = false
+
         init(_ task: Process) { self.task = task }
 
         var isRunning: Bool { task.isRunning }
@@ -331,6 +341,7 @@ struct ProcessRunner {
         // (asyncio workers, tunnel I/O helpers). Signalling only the parent
         // can leave the play loop running, so we walk the descendant tree.
         func stop() async {
+            wasStoppedIntentionally = true
             guard task.isRunning else { return }
             let pid = task.processIdentifier
 
@@ -496,12 +507,20 @@ struct ProcessRunner {
 
     // MARK: Long-running (output discarded to avoid pipe buffer deadlock)
 
-    func runDiscardingOutput(args: [String]) throws -> LongRunningHandle {
+    func runDiscardingOutput(
+        args: [String],
+        onTermination: ((Int32) -> Void)? = nil
+    ) throws -> LongRunningHandle {
         let task = try makeTask(args: args)
         let devNull = FileHandle.nullDevice
         task.standardInput = FileHandle.nullDevice
         task.standardOutput = devNull
         task.standardError = devNull
+        if let onTermination {
+            task.terminationHandler = { proc in
+                onTermination(proc.terminationStatus)
+            }
+        }
         try task.run()
         return LongRunningHandle(task)
     }

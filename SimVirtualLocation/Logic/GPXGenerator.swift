@@ -172,11 +172,21 @@ final class GPXPlayback {
     private(set) var endpoint: Endpoint?
     var isPlaying: Bool { handle?.isRunning ?? false }
 
+    /// Called on the main actor when the current play process dies without
+    /// stop() having been requested (tunnel drop, crash, early natural end).
+    /// Wired once by LocationController.
+    var onUnexpectedExit: ((Int32) -> Void)?
+
     // MARK: - Private
 
     private let client: MobileDeviceClient
     private let logger = AppLogger.shared
     private var handle: ProcessRunner.LongRunningHandle?
+
+    /// Monotonic start counter. Every start() claims a new generation; any
+    /// suspension point re-checks it so a superseded start can never install
+    /// its (stale) process as the current one — at most one live play process.
+    private var startGeneration = 0
 
     // MARK: - Init
 
@@ -189,7 +199,11 @@ final class GPXPlayback {
     func start(gpxURL: URL,
                endpoint: Endpoint,
                alert: @escaping (String) -> Void) async {
+        startGeneration += 1
+        let generation = startGeneration
+
         await stop()
+        guard generation == startGeneration else { return }
 
         currentGPXURL = gpxURL
         self.endpoint = endpoint
@@ -202,7 +216,16 @@ final class GPXPlayback {
         }
 
         do {
-            handle = try await client.playGPX(gpxURL, transport: transport)
+            let newHandle = try await client.playGPX(gpxURL, transport: transport) { [weak self] exitCode in
+                Task { @MainActor [weak self] in
+                    self?.handleTermination(generation: generation, exitCode: exitCode)
+                }
+            }
+            guard generation == startGeneration else {
+                await newHandle.stop()
+                return
+            }
+            handle = newHandle
         } catch {
             alert((error as? AppError)?.userMessage ?? error.localizedDescription)
         }
@@ -214,6 +237,20 @@ final class GPXPlayback {
         currentGPXURL = nil
         endpoint = nil
         await previous?.stop()
+    }
+
+    // MARK: - Private Methods
+
+    private func handleTermination(generation: Int, exitCode: Int32) {
+        // Superseded generations were stopped deliberately during a restart;
+        // stop() nils the handle before signalling, so both guards below
+        // filter intentional teardown.
+        guard generation == startGeneration,
+              let current = handle,
+              !current.wasStoppedIntentionally else { return }
+        handle = nil
+        logger.warn("GPX play process exited unexpectedly (code \(exitCode))")
+        onUnexpectedExit?(exitCode)
     }
 }
 
