@@ -255,6 +255,38 @@ final class MobileDeviceClient: ObservableObject {
         try await TunneldSupervisor.kill()
         tunneldStatus = .idle
     }
+
+    // MARK: - Tunnel recovery primitives
+
+    /// True when tunneld currently advertises a live tunnel for `udid`.
+    /// A 200 from tunneld is not enough — the daemon stays up even after a
+    /// specific device's tunnel drops, so we parse its JSON and look for the
+    /// UDID key explicitly.
+    func verifyTunnel(udid: String) async -> Bool {
+        let udids = await TunneldSupervisor.tunneledUDIDs(url: tunneldHostURL)
+        return udids.contains { $0.caseInsensitiveCompare(udid) == .orderedSame }
+    }
+
+    /// Whether the `remote tunneld` process is alive at all.
+    func tunneldProcessAlive() async -> Bool {
+        await TunneldSupervisor.isRunning()
+    }
+
+    /// Kills any existing tunneld and relaunches it as root in a single sudo
+    /// prompt, then waits for HTTP readiness. Used as the last rung of tunnel
+    /// recovery when a stuck or dead daemon is the only remaining explanation.
+    func forceRestartTunneld() async throws {
+        tunneldStatus = .authorizing
+        try await TunneldSupervisor.forceRestart()
+        tunneldStatus = .launching
+        do {
+            try await TunneldSupervisor.waitForReady(url: tunneldHostURL, timeout: 30.0)
+        } catch {
+            tunneldStatus = .failed("Not ready within 30s")
+            throw AppError.tunneldNotReady
+        }
+        tunneldStatus = .ready
+    }
 }
 
 // MARK: - ProcessRunner
@@ -470,6 +502,63 @@ enum TunneldSupervisor {
         throw AppError.tunneldNotReady
     }
 
+    /// Fetches tunneld's tunnel table and returns the UDIDs that currently
+    /// have a tunnel. tunneld responds with `{ "<udid>": [ { ... } ], ... }`.
+    /// Returns [] on any error (daemon down, non-2xx, unparseable body).
+    static func tunneledUDIDs(url: URL) async -> [String] {
+        var req = URLRequest(url: url)
+        req.timeoutInterval = 2.0
+        req.httpMethod = "GET"
+        do {
+            let (data, resp) = try await URLSession.shared.data(for: req)
+            guard let http = resp as? HTTPURLResponse,
+                  (200..<300).contains(http.statusCode),
+                  let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+            else { return [] }
+            return Array(obj.keys)
+        } catch {
+            return []
+        }
+    }
+
+    /// Kills any running tunneld and relaunches it, both inside a single
+    /// administrator prompt. The script is written to a 0700 temp file so the
+    /// pkill pattern's single quotes don't collide with osascript quoting.
+    static func forceRestart() async throws {
+        guard let pmPath = findPymobiledevice3Path() else {
+            throw AppError.pymobiledevice3NotInstalled
+        }
+        let scriptPath = NSTemporaryDirectory() + "skywalker-restart-tunneld.sh"
+        let body = """
+        #!/bin/sh
+        pkill -f 'pymobiledevice3 remote tunneld'
+        sleep 1
+        \(pmPath) remote tunneld > /tmp/skywalker-tunneld.log 2>&1 &
+        """
+        do {
+            try body.write(toFile: scriptPath, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes(
+                [.posixPermissions: 0o700], ofItemAtPath: scriptPath
+            )
+        } catch {
+            throw AppError.tunneldFailedToStart(error.localizedDescription)
+        }
+
+        let script = "do shell script \"/bin/sh \(scriptPath)\" with administrator privileges"
+        let appleScript = NSAppleScript(source: script)
+        var errorDict: NSDictionary?
+        _ = appleScript?.executeAndReturnError(&errorDict)
+
+        if let errorDict = errorDict {
+            let msg = (errorDict[NSAppleScript.errorMessage] as? String) ?? "Unknown error"
+            if msg.contains("User canceled") {
+                throw AppError.tunneldAuthorizationCancelled
+            }
+            throw AppError.tunneldAuthorizationFailed(msg)
+        }
+        logger.info("tunneld force-restarted as root")
+    }
+
     private static func isReachable(url: URL) async -> Bool {
         var req = URLRequest(url: url)
         req.timeoutInterval = 1.5
@@ -532,5 +621,115 @@ enum TunneldSupervisor {
             "/usr/local/bin/pymobiledevice3",
         ]
         return common.first { FileManager.default.isExecutableFile(atPath: $0) }
+    }
+}
+
+// MARK: - TunnelRecoveryCoordinator
+
+/// Drives the silent reconnect "ladder" when an RSD tunnel drops mid-session.
+/// Pure policy: it owns the retry/backoff/escalation strategy and delegates all
+/// I/O to `MobileDeviceClient`. It never touches UI — callers decide what to do
+/// with `.recovered` / `.failed`.
+///
+/// Ladder (cheapest rung first, sudo only as last resort):
+///  - L1: tunnel may already be back              → `verifyTunnel`
+///  - L2: daemon alive but device tunnel missing  → backoff-poll `verifyTunnel`
+///  - L3: daemon dead, or L2 exhausted            → `forceRestartTunneld` (sudo)
+@MainActor
+final class TunnelRecoveryCoordinator {
+
+    // MARK: - Public Types
+
+    enum Result {
+        case recovered
+        case failed
+    }
+
+    // MARK: - Private Properties
+
+    private let client: MobileDeviceClient
+    private let logger = AppLogger.shared
+
+    /// Reentrancy guard: a tunnel drop can be observed by both the inline
+    /// command path and the health-check timer at once. Both join the same
+    /// in-flight attempt instead of racing two recoveries.
+    private var inFlight: Task<Result, Never>?
+
+    /// Overall wall-clock budget for one recovery attempt.
+    private static let overallTimeout: TimeInterval = 25.0
+    /// Backoff schedule (seconds) while waiting for tunneld to rebuild the tunnel.
+    private static let backoffs: [UInt64] = [1, 2, 4]
+
+    // MARK: - Init
+
+    init(client: MobileDeviceClient) {
+        self.client = client
+    }
+
+    // MARK: - Public Methods
+
+    func recover(udid: String) async -> Result {
+        if let inFlight {
+            return await inFlight.value
+        }
+        let task = Task { [weak self] () -> Result in
+            guard let self else { return .failed }
+            return await self.runLadder(udid: udid)
+        }
+        inFlight = task
+        let result = await task.value
+        inFlight = nil
+        return result
+    }
+
+    // MARK: - Private Methods
+
+    private func runLadder(udid: String) async -> Result {
+        let deadline = Date().addingTimeInterval(Self.overallTimeout)
+        logger.info("Tunnel recovery started for \(udid)")
+
+        // L1 — maybe the tunnel is already back.
+        if await client.verifyTunnel(udid: udid) {
+            logger.info("Tunnel recovery L1: tunnel already live")
+            return .recovered
+        }
+
+        // L3 short-circuit — daemon is gone, no point backing off.
+        if await client.tunneldProcessAlive() == false {
+            logger.warn("Tunnel recovery: tunneld process dead, restarting (sudo)")
+            return await restartAndVerify(udid: udid, deadline: deadline)
+        }
+
+        // L2 — daemon alive but this device has no tunnel; give it time to rebuild.
+        for (attempt, secs) in Self.backoffs.enumerated() {
+            if Date() >= deadline { break }
+            try? await Task.sleep(nanoseconds: secs * 1_000_000_000)
+            if await client.verifyTunnel(udid: udid) {
+                logger.info("Tunnel recovery L2: tunnel rebuilt after \(attempt + 1) retries")
+                return .recovered
+            }
+        }
+
+        // L3 — last resort, force-restart the daemon (sudo).
+        logger.warn("Tunnel recovery L3: force-restarting tunneld (sudo)")
+        return await restartAndVerify(udid: udid, deadline: deadline)
+    }
+
+    private func restartAndVerify(udid: String, deadline: Date) async -> Result {
+        do {
+            try await client.forceRestartTunneld()
+        } catch {
+            logger.error("Tunnel recovery restart failed: \(error.localizedDescription)")
+            return .failed
+        }
+        while Date() < deadline {
+            if await client.verifyTunnel(udid: udid) {
+                logger.info("Tunnel recovery: tunnel live after restart")
+                return .recovered
+            }
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+        }
+        logger.error("Tunnel recovery failed for \(udid)")
+        return .failed
     }
 }

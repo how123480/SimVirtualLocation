@@ -17,6 +17,7 @@ enum DeviceStatus: Equatable {
     case mounting               // Mounting Developer Image
     case connecting             // Tunnel establishing
     case connected              // Connected
+    case reconnecting           // Tunnel dropped; attempting silent recovery
     case error(String)          // Failed (including reason)
 
     /// String displayed next to the button
@@ -28,6 +29,7 @@ enum DeviceStatus: Equatable {
         case .mounting:              return "Mounting..."
         case .connecting:            return "Connecting..."
         case .connected:             return "Connected"
+        case .reconnecting:          return "Reconnecting…"
         case .error(let msg):        return "Error: \(msg)"
         }
     }

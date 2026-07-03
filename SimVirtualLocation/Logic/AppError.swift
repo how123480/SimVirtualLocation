@@ -107,6 +107,19 @@ extension AppError {
         return false
     }
 
+    /// True when the error indicates the RSD tunnel to the device has dropped
+    /// (rather than a logical failure). Callers use this to trigger silent
+    /// tunnel recovery before giving up. Centralised here so the heuristic
+    /// lives in one place instead of scattered string comparisons.
+    var isTunnelDrop: Bool {
+        switch self {
+        case .noRouteToHost, .tunneldNotReady:
+            return true
+        default:
+            return false
+        }
+    }
+
     /// False when the error is informational and should not interrupt the user.
     var shouldShowAlert: Bool {
         switch self {
