@@ -225,7 +225,7 @@ final class MobileDeviceClient: ObservableObject {
 
     private let tunneldHostURL = URL(string: "http://127.0.0.1:49151/")!
 
-    func ensureTunneldRunning() async throws {
+    func ensureTunneldRunning(allowLaunch: Bool = false) async throws {
         if case .ready = tunneldStatus {
             if Date().timeIntervalSince(lastTunneldProbe) < Self.tunneldProbeInterval {
                 return
@@ -234,8 +234,13 @@ final class MobileDeviceClient: ObservableObject {
                 lastTunneldProbe = Date()
                 return
             }
-            logger.warn("tunneld no longer reachable; relaunching")
+            // tunneld died behind the cached .ready. Never relaunch from an
+            // inline command path — sudo prompts belong to the explicit
+            // Connect flow and the recovery ladder (single-flight, one
+            // prompt max).
+            logger.warn("tunneld no longer reachable")
             tunneldStatus = .idle
+            if !allowLaunch { throw AppError.tunneldNotReady }
         }
 
         if await TunneldSupervisor.isRunning() {
@@ -247,6 +252,8 @@ final class MobileDeviceClient: ObservableObject {
             logger.info("tunneld is ready")
             return
         }
+
+        guard allowLaunch else { throw AppError.tunneldNotReady }
 
         // Need root authorization to launch.
         tunneldStatus = .authorizing
@@ -484,9 +491,9 @@ struct ProcessRunner {
             kill(task.processIdentifier, SIGKILL)
             outTask.cancel()
             errTask.cancel()
-            throw AppError.processFailed(
+            throw AppError.commandTimedOut(
                 command: args.prefix(2).joined(separator: " "),
-                stderr: "timed out after \(Int(timeout))s"
+                seconds: Int(timeout)
             )
         }
 

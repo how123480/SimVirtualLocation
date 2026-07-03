@@ -458,6 +458,9 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
         if let transport = currentTransport() {
             do {
                 try await client.clearLocation(transport: transport)
+            } catch let error where (error as? AppError)?.isTunnelDrop == true {
+                // Best-effort: the tunnel is already gone, nothing to clear.
+                logger.warn("clearLocation skipped: tunnel unavailable")
             } catch {
                 errorHandler.handle(error)
             }
@@ -687,7 +690,7 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
     private func connectViaTunneld() async {
         do {
             self.deviceStatus = .waitingAuthorization
-            try await client.ensureTunneldRunning()
+            try await client.ensureTunneldRunning(allowLaunch: true)
             self.deviceStatus = .connected
         } catch {
             self.deviceStatus = .idle
@@ -709,6 +712,9 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
         if !selectedDevice.isEmpty {
             do {
                 try await client.clearLocation(transport: .legacy(udid: selectedDevice))
+            } catch let error where (error as? AppError)?.isTunnelDrop == true {
+                // Best-effort: the tunnel is already gone, nothing to clear.
+                logger.warn("clearLocation skipped: tunnel unavailable")
             } catch {
                 errorHandler.handle(error)
             }
@@ -727,6 +733,9 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
         if !selectedDevice.isEmpty {
             do {
                 try await client.clearLocation(transport: .rsd(udid: selectedDevice))
+            } catch let error where (error as? AppError)?.isTunnelDrop == true {
+                // Best-effort: the tunnel is already gone, nothing to clear.
+                logger.warn("clearLocation skipped: tunnel unavailable")
             } catch {
                 errorHandler.handle(error)
             }
@@ -1270,6 +1279,7 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
         guard shouldUseGPXPlayback,
               let endpoint = currentGPXEndpoint(),
               currentPolyline.count >= 2 else { return }
+        gpxRestartCount = 0
         startGPXPlayback(polyline: currentPolyline, endpoint: endpoint, reason: "initial")
     }
 

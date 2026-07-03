@@ -33,6 +33,7 @@ enum AppError: Error {
 
     // MARK: Command execution
     case processFailed(command: String, stderr: String)
+    case commandTimedOut(command: String, seconds: Int)
     case invalidCoordinate
 
     // MARK: Suppressed
@@ -96,6 +97,8 @@ extension AppError {
             return "Developer Image is already mounted"
         case .processFailed(let cmd, let stderr):
             return "[\(cmd)] failed: \(stderr)"
+        case .commandTimedOut(let cmd, let secs):
+            return "[\(cmd)] timed out after \(secs)s"
         case .invalidCoordinate:
             return "Coordinate format error"
         case .harmlessWarning(let m):
@@ -116,7 +119,7 @@ extension AppError {
     /// lives in one place instead of scattered string comparisons.
     var isTunnelDrop: Bool {
         switch self {
-        case .noRouteToHost, .tunneldNotReady, .tunnelConnectionLost:
+        case .noRouteToHost, .tunneldNotReady, .tunnelConnectionLost, .commandTimedOut:
             return true
         default:
             return false
