@@ -71,7 +71,7 @@ final class MobileDeviceClient: ObservableObject {
     // MARK: - Device discovery
 
     func listDevices() async throws -> [Device] {
-        let result = try await processRunner.run(args: ["--no-color", "usbmux", "list"])
+        let result = try await processRunner.run(args: ["--no-color", "usbmux", "list"], timeout: 15)
         if result.exitCode != 0 {
             throw AppError.from(stderr: result.stderr, context: .listDevices)
         }
@@ -85,7 +85,7 @@ final class MobileDeviceClient: ObservableObject {
     // MARK: - Developer Mode
 
     func checkDeveloperMode(udid: String) async throws -> Bool {
-        let result = try await processRunner.run(args: ["amfi", "developer-mode-status", "--udid", udid])
+        let result = try await processRunner.run(args: ["amfi", "developer-mode-status", "--udid", udid], timeout: 15)
         if result.exitCode != 0 {
             throw AppError.from(stderr: result.stderr, context: .checkDeveloperMode)
         }
@@ -98,14 +98,14 @@ final class MobileDeviceClient: ObservableObject {
 
     func revealDeveloperMode(udid: String) async throws {
         logger.info("Prompting device to open Developer Mode menu")
-        _ = try await processRunner.run(args: ["amfi", "reveal-developer-mode", "--udid", udid])
+        _ = try await processRunner.run(args: ["amfi", "reveal-developer-mode", "--udid", udid], timeout: 15)
         // reveal-developer-mode is best-effort; ignore exit code.
     }
 
     // MARK: - Mount Developer Image
 
     func mountDeveloperImage(udid: String) async throws -> MountResult {
-        let result = try await processRunner.run(args: ["mounter", "auto-mount", "--udid", udid])
+        let result = try await processRunner.run(args: ["mounter", "auto-mount", "--udid", udid], timeout: 300)
 
         // pymobiledevice3 prints "already mounted" on stderr with non-zero exit;
         // treat that as success.
@@ -127,7 +127,7 @@ final class MobileDeviceClient: ObservableObject {
             try await ensureTunneldRunning()
         }
         let args = locationSetArgs(coord, transport: transport)
-        let result = try await processRunner.run(args: args)
+        let result = try await processRunner.run(args: args, timeout: 15)
         try classifyResult(result, context: .setLocation)
     }
 
@@ -136,7 +136,7 @@ final class MobileDeviceClient: ObservableObject {
             try await ensureTunneldRunning()
         }
         let args = locationClearArgs(transport)
-        let result = try await processRunner.run(args: args)
+        let result = try await processRunner.run(args: args, timeout: 15)
         try classifyResult(result, context: .clearLocation)
     }
 
@@ -412,18 +412,67 @@ struct ProcessRunner {
 
     // MARK: One-shot
 
-    func run(args: [String]) async throws -> ProcessResult {
+    /// Runs a one-shot pymobiledevice3 command.
+    /// - The termination handler is installed BEFORE launch so a fast-exiting
+    ///   process can never terminate before the handler exists (which would
+    ///   leave the await hanging forever).
+    /// - stdout/stderr are drained concurrently with the running process;
+    ///   draining after exit deadlocks once output exceeds the 64 KB pipe buffer.
+    /// - `timeout` bounds the wait; on expiry the process is SIGKILLed and
+    ///   the call throws, so a hung command can't wedge its caller.
+    func run(args: [String], timeout: TimeInterval = 30) async throws -> ProcessResult {
         let task = try makeTask(args: args)
         let outPipe = Pipe()
         let errPipe = Pipe()
         task.standardInput = Pipe()
         task.standardOutput = outPipe
         task.standardError = errPipe
+
+        let (exitStream, exitContinuation) = AsyncStream.makeStream(of: Void.self)
+        task.terminationHandler = { _ in
+            exitContinuation.yield()
+            exitContinuation.finish()
+        }
+
         try task.run()
-        await waitExit(task)
-        let out = outPipe.fileHandleForReading.readDataToEndOfFile()
-        let err = errPipe.fileHandleForReading.readDataToEndOfFile()
+
+        let outTask = Task.detached { outPipe.fileHandleForReading.readDataToEndOfFile() }
+        let errTask = Task.detached { errPipe.fileHandleForReading.readDataToEndOfFile() }
+
+        let exited = await Self.waitForExit(exitStream, timeout: timeout)
+        if !exited {
+            kill(task.processIdentifier, SIGKILL)
+            outTask.cancel()
+            errTask.cancel()
+            throw AppError.processFailed(
+                command: args.prefix(2).joined(separator: " "),
+                stderr: "timed out after \(Int(timeout))s"
+            )
+        }
+
+        let out = await outTask.value
+        let err = await errTask.value
         return ProcessResult(exitCode: task.terminationStatus, stdout: out, stderr: err)
+    }
+
+    /// Returns true if the process exited before `timeout`, false on expiry.
+    private static func waitForExit(
+        _ stream: AsyncStream<Void>,
+        timeout: TimeInterval
+    ) async -> Bool {
+        await withTaskGroup(of: Bool.self) { group in
+            group.addTask {
+                for await _ in stream { break }
+                return true
+            }
+            group.addTask {
+                try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+                return false
+            }
+            let first = await group.next() ?? false
+            group.cancelAll()
+            return first
+        }
     }
 
     // MARK: Long-running (output discarded to avoid pipe buffer deadlock)
@@ -448,11 +497,6 @@ struct ProcessRunner {
         return t
     }
 
-    private func waitExit(_ task: Process) async {
-        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
-            task.terminationHandler = { _ in cont.resume() }
-        }
-    }
 }
 
 // MARK: - TunneldSupervisor
