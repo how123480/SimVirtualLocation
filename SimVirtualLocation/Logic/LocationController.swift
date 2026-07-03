@@ -145,7 +145,15 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
     private let runner = Runner()
     private let client = MobileDeviceClient()
     private lazy var recovery = TunnelRecoveryCoordinator(client: client)
-    private lazy var gpxPlayback = GPXPlayback(client: client)
+    private lazy var gpxPlayback: GPXPlayback = {
+        let playback = GPXPlayback(client: client)
+        playback.onUnexpectedExit = { [weak self] exitCode in
+            Task { @MainActor in
+                await self?.handleGPXPlaybackUnexpectedExit(exitCode: exitCode)
+            }
+        }
+        return playback
+    }()
     private let currentSimulationAnnotation = MKPointAnnotation()
     private let locationManager = CLLocationManager()
     private let completer = MKLocalSearchCompleter()
@@ -168,6 +176,10 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
     private var currentPolyline: [CLLocationCoordinate2D] = []
     /// Prevents continuous reschedule when speed changes, minimum interval 0.4s
     private var pendingSpeedRegenTask: Task<Void, Never>?
+    /// Consecutive automatic GPX restarts after unexpected play-process exits.
+    /// Capped so an unrecoverable device can't spin restart/alert loops.
+    private var gpxRestartCount = 0
+    private var lastGPXStartTime: Date = .distantPast
 
     private var timer: Timer?
     private var lastRunnerUpdateTime: Date = .distantPast
@@ -1081,11 +1093,44 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
     /// Restarts GPX playback after a recovered tunnel, continuing from the
     /// current position rather than restarting the route from Point A.
     private func restartGPXPlaybackAfterRecoveryIfNeeded() {
-        guard isRouteSimulationActive, shouldUseGPXPlayback,
+        guard isRouteSimulationActive, !simulationStatus.isPaused, shouldUseGPXPlayback,
               let endpoint = currentGPXEndpoint() else { return }
         let remaining = remainingPolyline()
         guard remaining.count >= 2 else { return }
         startGPXPlayback(polyline: remaining, endpoint: endpoint, reason: "recovery")
+    }
+
+    /// Entry point for GPXPlayback.onUnexpectedExit: the play process died
+    /// without our stop() — tunnel drop, pymobiledevice3 crash, or the process
+    /// finishing the file slightly before the local puck. Recover the tunnel
+    /// if needed and resume from the puck's current position.
+    private func handleGPXPlaybackUnexpectedExit(exitCode: Int32) async {
+        guard isRouteSimulationActive, !simulationStatus.isPaused, shouldUseGPXPlayback else { return }
+        guard remainingPolyline().count >= 2 else {
+            // Route is essentially finished; the local timer winds down normally.
+            return
+        }
+        if Date().timeIntervalSince(lastGPXStartTime) > 30 { gpxRestartCount = 0 }
+        guard gpxRestartCount < 3 else {
+            logger.error("GPX playback died \(gpxRestartCount) times in a row — giving up")
+            await handleDeviceDisconnection(udid: selectedDevice)
+            return
+        }
+        gpxRestartCount += 1
+        logger.warn("GPX playback exited unexpectedly (code \(exitCode)); restart attempt \(gpxRestartCount)/3")
+
+        if useRSD {
+            if await client.verifyTunnel(udid: selectedDevice) {
+                // Tunnel is fine — the play process itself died. Just restart.
+                restartGPXPlaybackAfterRecoveryIfNeeded()
+            } else if await attemptTunnelRecovery() {
+                restartGPXPlaybackAfterRecoveryIfNeeded()
+            } else {
+                await handleDeviceDisconnection(udid: selectedDevice)
+            }
+        } else {
+            restartGPXPlaybackAfterRecoveryIfNeeded()
+        }
     }
 
     private func handleDeviceDisconnection(udid: String) async {
@@ -1244,6 +1289,7 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
                 Task { @MainActor in self?.showAlert(msg) }
             }
             Task { @MainActor in
+                self.lastGPXStartTime = Date()
                 await self.gpxPlayback.start(gpxURL: url, endpoint: endpoint, alert: alert)
             }
         } catch {
