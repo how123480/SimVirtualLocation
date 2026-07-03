@@ -20,46 +20,65 @@ xcodebuild clean -project SimVirtualLocation.xcodeproj -scheme SimVirtualLocatio
 ./scripts/build-pkg.sh
 ```
 
-No test suite currently exists (`ENABLE_TESTABILITY = YES` is set but unused).
+No test suite currently exists (`ENABLE_TESTABILITY = YES` is set but unused). Verification = clean build + manual device scenarios.
 
 ## Architecture
 
-SwiftUI macOS app (11+) for spoofing iOS device GPS. External tools do the heavy lifting — the app is an orchestration layer.
+SwiftUI macOS app (12+) for spoofing iOS GPS (Simulator + physical devices). External tools do the heavy lifting — the app is an orchestration layer around `pymobiledevice3`.
 
-**Source layout:** `SimVirtualLocation/{Logic,Models,Views}/`
+**Source layout:** `SimVirtualLocation/{Logic,Models,Views,Views/iOS}/`
 
 ### Key components
 
-- **`LocationController`** (`Logic/LocationController.swift`) — `@MainActor ObservableObject`. Central coordinator: owns device/simulation state, drives `Runner` and `GPXPlayback`, manages the `MKMapView` delegate, and handles `CLLocationManagerDelegate` callbacks. All `@Published` UI state lives here.
-- **`Runner`** (`Logic/Runner.swift`) — `async/await` wrapper around `Process`. Runs `xcrun simctl` and `pymobiledevice3`. Provides both one-shot `set` calls and long-running `play` calls for GPX.
-- **`GPXGenerator` / `GPXPlayback`** (`Logic/GPXGenerator.swift`) — `GPXGenerator` converts a polyline + speed (km/h) into a GPX 1.1 file sampled at 1 trkpt/s, written to `~/Library/Application Support/SimVirtualLocation/routes/` (max 50 files). `GPXPlayback` is a `@MainActor` lifecycle wrapper around `pymobiledevice3 ... simulate-location play`; `start(...)` cancels any in-flight process before launching a new one.
-- **`AppLogger`** (`Logic/Logger.swift`) — singleton; all log calls must go through `.debug/info/warn/error`. **Never use `print()`**. Sanitizes home dir, UDIDs, UUIDs, and IPv6 link-local addresses before writing to `~/Library/Logs/SimVirtualLocation/app.log` (1 MB × 5 rotations).
+- **`LocationController`** (`Logic/LocationController.swift`, ~1700 lines) — `@MainActor ObservableObject`. Central coordinator: owns device/simulation state, drives `MobileDeviceClient` and `GPXPlayback`, manages the `MKMapView` delegate and `CLLocationManagerDelegate`, runs the 30 s device health check and the joystick. All `@Published` UI state lives here.
+- **`MobileDeviceClient`** (`Logic/MobileDeviceClient.swift`, ~1000 lines) — the single abstraction over `pymobiledevice3`. Contains four units:
+  - `MobileDeviceClient` (`@MainActor`) — device listing, Developer Mode, mount, set/clear location, GPX play, tunneld lifecycle, and the persistent-helper routing.
+  - `ProcessRunner` — one-shot process execution. `static execute(executable:args:timeout:)` runs ANY executable (termination handler installed *before* launch, stdout/stderr drained concurrently, SIGKILL on timeout); instance `run(args:timeout:)` delegates to it for pymobiledevice3. `runDiscardingOutput`/`runUntilStdoutReady` return a `LongRunningHandle` (SIGTERMs the descendant tree on `stop()`, exposes `wasStoppedIntentionally` + a termination callback).
+  - `TunneldSupervisor` — static utility for the `pymobiledevice3 remote tunneld` root daemon (pgrep liveness, HTTP readiness on `127.0.0.1:49151`, osascript admin launch/kill). The daemon survives app quits; it is launched at most once per Mac boot.
+  - `TunnelRecoveryCoordinator` — the silent reconnect ladder (L1 verify → L2 backoff-poll → L3 sudo force-restart), single-flight so concurrent triggers join one attempt.
+- **`LocationHelperScript` / `LocationHelperClient`** (`Logic/LocationHelperScript.swift`, `Logic/LocationHelperClient.swift`) — the persistent location helper (see connection stack below).
+- **`GPXGenerator` / `GPXPlayback`** (`Logic/GPXGenerator.swift`) — `GPXGenerator` converts a polyline + speed (km/h) into a GPX 1.1 file (1 trkpt/s) under `~/Library/Application Support/SimVirtualLocation/routes/` (max 50 kept). `GPXPlayback` (`@MainActor`) wraps `pymobiledevice3 … simulate-location play` with a **generation token** (overlapping `start()` calls can never leave two play processes alive) and reports unexpected process death via `onUnexpectedExit`.
+- **`Runner`** (`Logic/Runner.swift`) — now only the iOS Simulator path (posts distributed notifications via `NotificationSender`) plus the `timeDelay` throttle.
+- **`AppError` / `ErrorHandler`** (`Logic/AppError.swift`, `Logic/ErrorHandler.swift`) — every fallible operation surfaces a typed `AppError`; `ErrorHandler` decides log/alert/state-reset. `AppError.from(stderr:context:)` classifies pymobiledevice3 stderr; `isTunnelDrop == true` (no-route-to-host, connection refused/reset, tunneld unreachable, command timeout, …) routes into silent tunnel recovery instead of alerting.
+- **`AppLogger`** (`Logic/Logger.swift`) — singleton; all logging goes through `.debug/info/warn/error`. **Never use `print()`**. Every message is sanitized at write time (home dir, UDIDs, UUIDs, IPv6 link-local) before hitting `~/Library/Logs/SimVirtualLocation/app.log` (1 MB × 5 rotations) and the in-app log panel — so interpolating a UDID or path into a log message is safe.
 - **`MapView`** (`Views/MapView.swift`) — `NSViewRepresentable` wrapper for `MKMapView`.
 - **`ContentView`** (`Views/ContentView.swift`) — root view; owns all global key event monitors (`Esc`, `d`, arrow keys). Uses `@FocusState` to avoid intercepting TextField input. Defines the single source of truth `sidePanelTotalWidth: CGFloat = 360` used for both the map zoom-button trailing offset and for syncing `LocationController.mapVisibleInsetRight`.
 - **`Views/DesignSystem.swift`** — the entire visual language lives here. **All buttons, dividers, section labels, status indicators, and container backgrounds must come from this file.** Do not reach for `.bordered`, `.borderedProminent`, raw `Color.gray`, or one-off `RoundedRectangle` chrome in feature code.
-- **`AppDelegate`** (`Views/Main.swift`) — sets `NSApp.setActivationPolicy(.regular)` in `applicationWillFinishLaunching`. Required because SPM-built executables (`swift run`, `open Package.swift`) otherwise launch as `.accessory` and their windows can never become key, so keyboard events get silently dropped.
+- **`AppDelegate`** (`Views/Main.swift`) — sets `NSApp.setActivationPolicy(.regular)` in `applicationWillFinishLaunching`. Required because SPM-built executables otherwise launch as `.accessory` and their windows can never become key, so keyboard events get silently dropped.
+
+### iOS device connection stack (RSD, iOS 17+)
+
+Understanding this flow requires reading `LocationController` + `MobileDeviceClient` + `LocationHelperClient` together:
+
+1. **Connect** (`startDevice` → `connectViaTunneld`): checks Developer Mode, ensures tunneld is running (`ensureTunneldRunning(allowLaunch: true)` — the ONLY inline path allowed to sudo-launch tunneld), then warms up the location helper in the background. iOS ≤16 uses the legacy path (`mountDeveloperImage`, one-shot CLI commands, no tunnel).
+2. **set/clear go through the persistent helper first.** `pymobiledevice3` 9.5.1's `dvt simulate-location set` intentionally never exits (`wait_return`) — one-shot spawns would leak a hung Python process per tick. Instead, a Python helper (source embedded in `LocationHelperScript.source`, written to Application Support at runtime, run with the interpreter parsed from pymobiledevice3's shebang) holds ONE DVT `LocationSimulation` connection and serves line-JSON `set`/`clear`/`ping` over stdin/stdout. `LocationHelperClient` enforces FIFO request/response pairing, 5 s command timeouts (timeout ⇒ fail-all-pending + kill + auto-restart), per-spawn generation guards, a 3-restart cap with last-coordinate re-send, and device-UDID ownership (a picker switch shuts the old helper down). Helper death auto-clears the device's simulated location (iOS drops simulation when the DTX connection dies).
+3. **Fallback:** if the helper can't run (sticky `helperUnsupported`, or a 30 s start-failure cooldown), RSD `set` falls back to `runUntilStdoutReady` — the set process is kept as a managed `LongRunningHandle` (readiness = first stdout byte, needs `PYTHONUNBUFFERED=1`), stopped on the next set/clear.
+4. **Health check** (every 30 s while `.connected`): USB presence via `usbmux list` AND `verifyTunnel` (tunneld's JSON must list the udid — a 200 from tunneld is not enough). Two consecutive failures trigger the recovery ladder; only if the ladder fails does the app tear down and alert.
+5. **Sudo policy:** password prompts may only originate from the Connect button or the recovery ladder's L3 (`forceRestartTunneld`) — never from per-tick sends or Stop. Inline commands that find tunneld dead throw `tunneldNotReady` (a tunnel-drop) and let recovery handle it.
+6. **Stop:** `stopSimulation` kills swift-side tasks + play process, clears via the helper (near-instant), then `pkill -f simulate-location` (which deliberately does NOT match `location-helper.py`, so the warm helper survives). Teardown clears are best-effort — tunnel-drop errors log instead of alerting. The final log line is timed: `Simulation stopped (N.NNs)`.
 
 ### Status enums (`Models/DeviceStatus.swift`)
 
-- `DeviceStatus`: `.idle | .checkingDeveloperMode | .waitingAuthorization | .mounting | .connecting | .connected | .error(String)`. Use `.isReady` to gate hardware updates; `.displayText` for UI labels.
-- `SimulationStatus`: `.idle | .route | .fromAToB | .mocking`. Use `.isMockingActive` for joystick live-send logic; `isRouteSimulationActive` (computed on `LocationController`) locks A/B annotations during route playback.
+- `DeviceStatus`: `.idle | .checkingDeveloperMode | .waitingAuthorization | .mounting | .connecting | .connected | .reconnecting | .error(String)`. `.isReady` gates hardware updates (only `.connected`); `.reconnecting` is the silent-recovery state and is NOT ready — this is what stops the health-check timer and per-tick GPX gating during recovery.
+- `SimulationStatus`: `.idle | .route | .fromAToB | .routePaused | .fromAToBPaused | .mocking | .stopping`. `.isMockingActive` covers everything except `.idle`/`.stopping` (so `stopSimulation` is idempotent); `isRouteSimulationActive` (computed on `LocationController`) locks A/B annotations during route playback; paused states still own the device location.
 
 ### GPX playback flow (iOS physical device, Route/A→B)
 
 1. `simulateRoute()` / `simulateFromAToB()` build `tracks` (visual puck path) and `currentPolyline` (full GPX source).
-2. `kickoffGPXPlaybackIfNeeded()` → `GPXGenerator.render(...)` writes the file → `GPXPlayback.start(...)` launches `pymobiledevice3 ... simulate-location play`.
-3. The local 0.1 s movement timer skips `run(location:)` while `shouldUseGPXPlayback` is true (device path) so the play process and the per-tick sender never double-drive the device. If the play process dies unexpectedly, `GPXPlayback.onUnexpectedExit` → `handleGPXPlaybackUnexpectedExit()` recovers the tunnel if needed and restarts playback from the puck's current position (max 3 consecutive restarts).
+2. `kickoffGPXPlaybackIfNeeded()` → `GPXGenerator.render(...)` runs **detached** (sampling long low-speed routes takes seconds) guarded by `gpxKickoffGeneration` so a stale render can't start playback → `GPXPlayback.start(...)` launches `pymobiledevice3 … simulate-location play`.
+3. The local 0.1 s movement timer skips `run(location:)` while `shouldUseGPXPlayback` is true (device path) so the play process and the per-tick sender never double-drive the device. If the play process dies unexpectedly, `GPXPlayback.onUnexpectedExit` → `handleGPXPlaybackUnexpectedExit()` recovers the tunnel if needed and restarts playback from the puck's current position (max 3 consecutive restarts, cap reset per kickoff).
 4. Speed slider changes trigger a 0.4 s debounce → `remainingPolyline()` from the puck's current position → new GPX written → old process SIGTERMed → new process started. The puck does not jump back to A.
 5. iOS Simulator uses per-tick `set` calls instead (no GPX equivalent).
 
 ## Critical Code Rules
 
-- **No `DispatchQueue`** — use `Task { @MainActor in ... }` for hops to main actor, `Task.detached(priority: .userInitiated)` for genuine background work.
-- **No `print()`** — use `AppLogger.shared`.
-- **No force-unwrap** (`!`) unless the value is provably non-nil.
+- **No `DispatchQueue`** — use `Task { @MainActor in ... }` for hops to main actor, `Task.detached(priority: .userInitiated)` for genuine background work, `ProcessRunner.execute` for subprocess calls.
+- **No `print()`** — use `AppLogger.shared` (auto-sanitized; see above).
+- **No force-unwrap** (`!`) unless the value is provably non-nil (`urls(for:in:).first!` is the accepted exception).
 - `[weak self]` in all `Timer` callbacks and async closures that close over the controller.
 - New status cases must add a `displayText` computed property so views never format strings inline.
 - `// MARK: -` sections order: Enums → Public Properties → Publishers → Private Properties → Init → Public Methods → Protocol Conformance → Private Methods.
+- Concurrency around processes: install `terminationHandler` BEFORE `run()`; never read pipes only after exit (64 KB deadlock); bound every external command with a timeout.
 
 ## UI Design System (`Views/DesignSystem.swift`)
 
@@ -90,36 +109,36 @@ The control panel follows a strict macOS-native visual language. Reuse the exist
 ## UX Rules
 
 - **Optimistic status updates.** When kicking off any mocking action, set the `simulationStatus` synchronously (e.g. `.mocking`) *before* the async device call, so the UI flips instantly. Revert to `.idle` only on failure. See `run(location:)` for the pattern.
-- **Mode-switch auto-stop.** `handlePointsModeChange()` first awaits `stopSimulation(clearAnnotations: false)` if any mocking is active (covers `.route`, `.fromAToB`, `.mocking`), then performs annotation cleanup. Sequenced in a `Task @MainActor` so the cleanup runs *after* teardown completes — no race with the simulator process.
+- **Mode-switch auto-stop.** `handlePointsModeChange()` first awaits `stopSimulation(clearAnnotations: false)` if any mocking is active, then performs annotation cleanup. Sequenced in a `Task @MainActor` so the cleanup runs *after* teardown completes.
 - **Point A persistence.** When the user stops single-point mocking, call `stopSimulation(clearAnnotations: false)` so Point A stays on the map and can be re-applied without re-placing the pin. Route stops (which discard A/B by design) keep the default `clearAnnotations: true`.
 - **Map centering must respect the side panel.** Every fly-to / fit-to-rect call funnels through one of two helpers on `LocationController`:
   - `centerVisibleOn(_:)` — for a single coordinate (Point A placement, Apply to A, search-result pick, locate-me).
   - `showVisibleMapRect(_:edgeMargin:)` — for arbitrary rects (Simulate Route bounds, A→B Linear bounds).
-  Both consult `@Published var mapVisibleInsetRight: CGFloat`, which `ContentView` syncs from `showSidePanel`. When the panel is closed the inset is 0 and the helpers degrade to a normal full-window fit. **Do not call `mapView.setRegion(_:animated:)` directly** for user-initiated camera moves.
+  Both consult `@Published var mapVisibleInsetRight: CGFloat`, which `ContentView` syncs from `showSidePanel`. **Do not call `mapView.setRegion(_:animated:)` directly** for user-initiated camera moves.
 - **Status zone at top of control panel.** Device state + simulation state are surfaced as two horizontal `LiveStatusPill`s in `StatusPanel` (iOSPanel.swift). Green = active/ok, orange + spinner = in-progress, red = error, gray + `pulses: false` = idle. Animate pill changes with `.easeInOut(duration: 0.25)`.
 
 ## Model invariants
 
 - `Location.id` is a **stored `UUID`**, not derived from coordinates. Required so duplicate-coordinate saves render as separate rows in `ForEach` and `removeAll { $0.id == ... }` only deletes the targeted row. The `Decodable` init synthesizes a fresh UUID when older saved data lacks the field (backward-compat).
 
-## Worktree gotcha
+## Project-file gotchas
 
-`SimVirtualLocation.xcodeproj/project.pbxproj` is in `.gitignore`. When checking out a new worktree, `xcode-build-server` / SweetPad / direct Xcode opens will fail until you copy `project.pbxproj` from the main checkout into the worktree:
-
-```bash
-cp ../../SimVirtualLocation.xcodeproj/project.pbxproj SimVirtualLocation.xcodeproj/project.pbxproj
-```
+- **`project.pbxproj` is gitignored** but required to build. New Swift files must be registered manually (no synchronized folders): one `PBXBuildFile` line, one `PBXFileReference` line, one group-children entry, one Sources-phase entry. The project uses synthetic `AA0000XX…A1`-style IDs for hand-added files — pick unused ones.
+- **Worktrees:** a fresh worktree lacks `project.pbxproj`; copy it from the main checkout (`cp ../../SimVirtualLocation.xcodeproj/project.pbxproj SimVirtualLocation.xcodeproj/project.pbxproj`) or `xcode-build-server`/SweetPad/Xcode fail.
+- **SourceKit false errors:** after pbxproj edits, the IDE often reports bogus "Cannot find X in scope" diagnostics across files while `xcodebuild` succeeds. Trust the build; restart Xcode/xcode-build-server to clear.
 
 ## External Dependencies
 
 | Tool | Used for | How detected |
 |------|----------|--------------|
-| `pymobiledevice3` | iOS physical device commands | Auto-detected in `~/Library/Python/` |
-| `xcrun simctl` | iOS Simulator | Built into macOS |
+| `pymobiledevice3` (9.5.x) | iOS physical device commands + tunneld daemon | `~/.local/bin`, `/opt/homebrew/bin`, `/usr/local/bin`, `/usr/bin`, then `which` |
+| pymobiledevice3's venv Python | runs the embedded location helper | parsed from the pymobiledevice3 executable's shebang |
+| `xcrun simctl` | iOS Simulator listing | built into macOS |
 
-Setup: `./scripts/setup.sh` installs `uv` and `pymobiledevice3`.
-Check environment: `./scripts/check-env.sh`.
+Setup: `./scripts/setup.sh` installs `uv` and `pymobiledevice3`. Check environment: `./scripts/check-env.sh`.
+
+The pymobiledevice3 **library** API (tunneld lookup, `DvtProvider`, `LocationSimulation`) is consumed by the embedded helper script and changes between versions — `LocationHelperScript.source` targets 9.5.x; an `ImportError` makes the helper exit 3 and the app falls back to CLI one-shots for the rest of the run.
 
 ## UserDefaults Keys
 
-`xcode_path`, `saved_locations` (JSON).
+`xcode_path`, `saved_locations` (JSON), `location_labels` (JSON).

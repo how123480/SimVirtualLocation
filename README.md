@@ -1,10 +1,10 @@
 # SimVirtualLocation
 
-Easy to use MacOS 11+ application for easy mocking iOS device and simulator location in realtime. Built on top of [set-simulator-location](https://github.com/MobileNativeFoundation/set-simulator-location) for iOS Simulators and [pymobiledevice3](https://github.com/doronz88/pymobiledevice3). Android support is realized with [SimVirtualLocation](https://github.com/nexron171/android-mock-location-for-development) android app which is a fork from [android-mock-location-for-development](https://github.com/amotzte/android-mock-location-for-development).
+Easy to use macOS 12+ application for mocking iOS device and simulator location in realtime. Built on top of [set-simulator-location](https://github.com/MobileNativeFoundation/set-simulator-location) for iOS Simulators and [pymobiledevice3](https://github.com/doronz88/pymobiledevice3) for physical devices.
 
 ## Features
 
-- Supports both iOS (Simulators and Physical Devices) and Android Devices.
+- Supports iOS Simulators and physical iOS devices (legacy and iOS 17+ RSD).
 - Set location to current Mac's location.
 - Set location to a specific point on the map.
 - Create a route between multiple points and simulate moving with desired speed.
@@ -20,6 +20,7 @@ Easy to use MacOS 11+ application for easy mocking iOS device and simulator loca
 - **Dedicated status zone**: The top of the control panel always shows two pill indicators — one for device state (Disconnected / Connecting… / Connected / Error) and one for simulation state (Idle / Mocking Point A / Simulating Route / Simulating A→B / Stopping…). Active states pulse, in-progress states show a spinner, errors turn red.
 - **Smart map centering**: Whenever the app flies the map (Apply to A, Simulate Route fit, A→B Linear fit, search-result pick, locate-me), the focused content lands in the *visible* portion of the map — the side panel's footprint is excluded from the "center" so the pin never sits behind the panel.
 - **One-time authorization for iOS 17+.** A background `pymobiledevice3 remote tunneld` daemon is launched on first connect (one admin password prompt); subsequent Start/Stop operations require no password. The daemon survives app restart and is reset only by Mac reboot.
+- **Instant location restore on Stop.** A persistent location helper keeps one DVT connection to the device, so pressing Stop returns the phone to its real GPS position in well under a second (instead of waiting for a fresh CLI invocation), and the connection self-recovers if the tunnel drops.
 
 You can download compiled and signed app [here](https://skywalker-howardhoward.netlify.app/).
 
@@ -28,7 +29,7 @@ You can download compiled and signed app [here](https://skywalker-howardhoward.n
 ## Usage Methods
 
 ### Basic Usage
-1. Connect your device (iOS Simulator, iOS Device, or Android Device).
+1. Connect your device (iOS Simulator or iOS Device).
 2. Select the target device from the device dropdown list.
 3. Choose the mode (Single Point or Route).
 4. Click on the map to place markers.
@@ -71,14 +72,6 @@ No manual configuration required.
 4. The daemon stays alive across app launches. It is reset only on Mac reboot or if you kill it from Activity Monitor.
 
 > The app version derives the device's iOS version from `pymobiledevice3 usbmux list` and automatically routes commands through the legacy or tunneld code path. There is no manual "iOS 17+" toggle and no RSD Address / Port field to fill in.
-
-### For Android Devices
-1. Check if debugging over USB is enabled.
-2. Specify ADB path (for example `/User/dev/android/tools/adb`).
-3. Specify your device id (type `adb devices` in the terminal to see id).
-4. Setup helper app by clicking `Install Helper App` and open it on the phone.
-5. Grant permission to mock location - go to Developer settings and find `Application for mocking locations` or something similar and choose SimVirtualLocation.
-6. Keep SimVirtualLocation running in background while mocking.
 
 ## Quick Setup
 
