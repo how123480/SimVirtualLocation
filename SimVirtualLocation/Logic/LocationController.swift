@@ -180,6 +180,10 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
     /// Capped so an unrecoverable device can't spin restart/alert loops.
     private var gpxRestartCount = 0
     private var lastGPXStartTime: Date = .distantPast
+    /// GPX rendering runs detached (it can take seconds for long low-speed
+    /// routes); this counter lets a stale render that finishes late detect it
+    /// was superseded and skip starting playback with an outdated polyline.
+    private var gpxKickoffGeneration = 0
 
     private var timer: Timer?
     private var lastRunnerUpdateTime: Date = .distantPast
@@ -246,7 +250,7 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
 
     func refreshDevices() async {
         if showSimulatorOption {
-            bootedSimulators = (try? getBootedSimulators()) ?? []
+            bootedSimulators = (try? await getBootedSimulators()) ?? []
             selectedSimulator = bootedSimulators.first?.id ?? ""
         } else {
             bootedSimulators = []
@@ -410,20 +414,29 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
 
     func prepareEmulator() {
         guard ensureAdbAvailable() else { return }
-        executeAdbCommand(args: ["shell", "settings", "put", "secure", "location_providers_allowed", "+gps"])
-        executeAdbCommand(
-            args: ["shell", "settings", "put", "secure", "location_providers_allowed", "+network"],
-            successMessage: "Emulator is ready"
-        )
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.executeAdbCommand(args: ["shell", "settings", "put", "secure", "location_providers_allowed", "+gps"])
+            await self.executeAdbCommand(
+                args: ["shell", "settings", "put", "secure", "location_providers_allowed", "+network"],
+                successMessage: "Emulator is ready"
+            )
+        }
     }
 
     func installHelperApp() {
         guard ensureAdbAvailable() else { return }
-        let apkPath = Bundle.main.url(forResource: "helper-app", withExtension: "apk")!.path
-        executeAdbCommand(
-            args: ["-s", adbDeviceId, "install", apkPath],
-            successMessage: "Helper App installation complete, please open and authorize on your phone"
-        )
+        guard let apkPath = Bundle.main.url(forResource: "helper-app", withExtension: "apk")?.path else {
+            showAlert("helper-app.apk is missing from the app bundle")
+            return
+        }
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.executeAdbCommand(
+                args: ["-s", self.adbDeviceId, "install", apkPath],
+                successMessage: "Helper App installation complete, please open and authorize on your phone"
+            )
+        }
     }
 
     private func ensureAdbAvailable() -> Bool {
@@ -1311,9 +1324,9 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
         guard abs(oldValue - speed) > 0.1 else { return }
         // Simple throttle: cancel the previous pending task and reschedule for 0.4s later to avoid excessive restarts while dragging the slider
         pendingSpeedRegenTask?.cancel()
-        pendingSpeedRegenTask = Task { @MainActor in
+        pendingSpeedRegenTask = Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: 400_000_000)
-            if Task.isCancelled { return }
+            guard let self, !Task.isCancelled else { return }
             guard self.isRouteSimulationActive, self.gpxPlayback.isPlaying else { return }
             guard let endpoint = self.currentGPXEndpoint() else { return }
             let remaining = self.remainingPolyline()
@@ -1322,32 +1335,44 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
         }
     }
 
-    /// Shared: Write file + start GPXPlayback
+    /// Shared: Write file + start GPXPlayback.
+    /// Sampling + XML rendering can take seconds for long low-speed routes, so
+    /// it runs detached; the generation guard drops a stale render that
+    /// finishes after a newer kickoff (e.g. rapid speed-slider changes).
     private func startGPXPlayback(
         polyline: [CLLocationCoordinate2D],
         endpoint: GPXPlayback.Endpoint,
         reason: String
     ) {
-        do {
+        gpxKickoffGeneration += 1
+        let generation = gpxKickoffGeneration
+        let speedKmh = speed
+        Task { @MainActor [weak self] in
             let name = "route-\(Int(Date().timeIntervalSince1970))-\(UUID().uuidString.prefix(6))"
-            let url = try GPXGenerator.render(
-                polyline: polyline,
-                speedKmh: speed,
-                name: name
-            )
-            logger.info("GPX written (\(reason)): \(url.path) – \(polyline.count) nodes @ \(Int(speed)) km/h")
-            GPXGenerator.pruneOldFiles()
+            let url: URL
+            do {
+                url = try await Task.detached(priority: .userInitiated) {
+                    let rendered = try GPXGenerator.render(
+                        polyline: polyline,
+                        speedKmh: speedKmh,
+                        name: name
+                    )
+                    GPXGenerator.pruneOldFiles()
+                    return rendered
+                }.value
+            } catch {
+                self?.logger.error("Failed to write GPX: \(error.localizedDescription)")
+                self?.showAlert("Failed to write GPX: \(error.localizedDescription)")
+                return
+            }
+            guard let self, generation == self.gpxKickoffGeneration else { return }
+            self.logger.info("GPX written (\(reason)): \(url.path) – \(polyline.count) nodes @ \(Int(speedKmh)) km/h")
 
             let alert: (String) -> Void = { [weak self] msg in
                 Task { @MainActor in self?.showAlert(msg) }
             }
-            Task { @MainActor in
-                self.lastGPXStartTime = Date()
-                await self.gpxPlayback.start(gpxURL: url, endpoint: endpoint, alert: alert)
-            }
-        } catch {
-            logger.error("Failed to write GPX: \(error.localizedDescription)")
-            showAlert("Failed to write GPX: \(error.localizedDescription)")
+            self.lastGPXStartTime = Date()
+            await self.gpxPlayback.start(gpxURL: url, endpoint: endpoint, alert: alert)
         }
     }
 
@@ -1365,28 +1390,20 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
         return pts
     }
 
-    private func executeAdbCommand(args: [String], successMessage: String? = nil) {
+    private func executeAdbCommand(args: [String], successMessage: String? = nil) async {
         guard ensureAdbAvailable() else { return }
-        let task = Process()
-        task.executableURL = URL(fileURLWithPath: adbPath)
-        task.arguments = args
-        let errPipe = Pipe()
-        task.standardError = errPipe
-
         do {
-            try task.run()
-            task.waitUntilExit()
+            // `adb install` of the bundled helper APK can take a while on a
+            // slow device, hence the generous timeout.
+            let result = try await ProcessRunner.execute(executable: adbPath, args: args, timeout: 120)
+            let err = String(decoding: result.stderr, as: UTF8.self)
+            if !err.isEmpty {
+                showAlert(err)
+            } else if let msg = successMessage {
+                showAlert(msg)
+            }
         } catch {
             showAlert(error.localizedDescription)
-            return
-        }
-
-        let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
-        let err = String(decoding: errData, as: UTF8.self)
-        if !err.isEmpty {
-            showAlert(err)
-        } else if let msg = successMessage {
-            showAlert(msg)
         }
     }
 
@@ -1462,18 +1479,18 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
 
         // Android
         if deviceType != 0 {
-            currentRunTask = Task {
-                if Task.isCancelled { return }
-                guard ensureAdbAvailable() else {
-                    if simulationStatus == .mocking { simulationStatus = .idle }
+            currentRunTask = Task { [weak self] in
+                guard let self, !Task.isCancelled else { return }
+                guard self.ensureAdbAvailable() else {
+                    if self.simulationStatus == .mocking { self.simulationStatus = .idle }
                     return
                 }
-                logger.debug("Android location: deviceId=\(adbDeviceId), isEmulator=\(isEmulator)")
-                await runner.runOnAndroid(
+                self.logger.debug("Android location: deviceId=\(self.adbDeviceId), isEmulator=\(self.isEmulator)")
+                await self.runner.runOnAndroid(
                     location: location,
-                    adbDeviceId: adbDeviceId,
-                    adbPath: adbPath,
-                    isEmulator: isEmulator,
+                    adbDeviceId: self.adbDeviceId,
+                    adbPath: self.adbPath,
+                    isEmulator: self.isEmulator,
                     showAlert: weakAlert
                 )
             }
@@ -1523,12 +1540,12 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
             showAlert(SimulatorFetchError.noBootedSimulators.description)
             return
         }
-        currentRunTask = Task {
-            if Task.isCancelled { return }
-            runner.runOnSimulator(
+        currentRunTask = Task { [weak self] in
+            guard let self, !Task.isCancelled else { return }
+            self.runner.runOnSimulator(
                 location: location,
-                selectedSimulator: selectedSimulator,
-                bootedSimulators: bootedSimulators
+                selectedSimulator: self.selectedSimulator,
+                bootedSimulators: self.bootedSimulators
             )
         }
     }
@@ -1571,22 +1588,17 @@ private extension LocationController {
         return try await client.listDevices()
     }
 
-    func getBootedSimulators() throws -> [Simulator] {
-        let task = Process()
-        task.launchPath = "/usr/bin/xcrun"
-        task.arguments = ["simctl", "list", "-j", "devices"]
-        let pipe = Pipe()
-        task.standardOutput = pipe
-        task.launch()
+    func getBootedSimulators() async throws -> [Simulator] {
+        let result = try await ProcessRunner.execute(
+            executable: "/usr/bin/xcrun",
+            args: ["simctl", "list", "-j", "devices"],
+            timeout: 30
+        )
 
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        task.waitUntilExit()
-        pipe.fileHandleForReading.closeFile()
-
-        if task.terminationStatus != 0 { throw SimulatorFetchError.simctlFailed }
+        if result.exitCode != 0 { throw SimulatorFetchError.simctlFailed }
         let booted: [Simulator]
         do {
-            booted = try JSONDecoder().decode(Simulators.self, from: data).bootedSimulators
+            booted = try JSONDecoder().decode(Simulators.self, from: result.stdout).bootedSimulators
         } catch {
             throw SimulatorFetchError.failedToReadOutput
         }

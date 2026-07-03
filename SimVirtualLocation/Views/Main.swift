@@ -31,7 +31,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        DispatchQueue.main.async {
+        // Deferred one runloop turn so the SwiftUI window exists before we
+        // try to make it key.
+        Task { @MainActor in
             NSApp.activate(ignoringOtherApps: true)
             if let window = NSApp.windows.first(where: { $0.canBecomeKey }) {
                 window.makeKeyAndOrderFront(nil)

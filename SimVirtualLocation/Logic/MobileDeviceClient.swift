@@ -409,19 +409,19 @@ final class MobileDeviceClient: ObservableObject {
     /// Must be called AFTER clearLocation has completed — the broad pattern would
     /// also match a running clearLocation process.
     func killResidualSimulationProcesses() async {
-        let task = Process()
-        task.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")
-        task.arguments = ["-f", "simulate-location"]
-        task.standardOutput = FileHandle.nullDevice
-        task.standardError = FileHandle.nullDevice
-        try? task.run()
-        task.waitUntilExit()
+        logger.debug("Killing residual simulate-location processes")
+        _ = try? await ProcessRunner.execute(
+            executable: "/usr/bin/pkill",
+            args: ["-f", "simulate-location"],
+            timeout: 10
+        )
     }
 
     /// Manual-only. Not wired to any default UI affordance.
     func killTunneld() async throws {
         try await TunneldSupervisor.kill()
         tunneldStatus = .idle
+        logger.info("tunneld killed manually")
     }
 
     // MARK: - Tunnel recovery primitives
@@ -474,9 +474,9 @@ struct ProcessRunner {
     final class LongRunningHandle {
         let task: Process
 
-        /// Set at the top of stop() — before any signalling — so a termination
-        /// callback that fires during teardown can tell a deliberate stop from
-        /// an unexpected death. Written and read on the main actor only.
+        /// Set at the top of stop() — before any signal is sent — so it is
+        /// always visible by the time a termination callback's main-actor hop
+        /// runs, letting it tell a deliberate stop from an unexpected death.
         private(set) var wasStoppedIntentionally = false
 
         init(_ task: Process) { self.task = task }
@@ -493,7 +493,7 @@ struct ProcessRunner {
 
             // Collect descendants BEFORE the parent dies — once it exits,
             // children get reparented to launchd and pgrep -P can no longer find them.
-            let descendants = Self.collectDescendants(of: pid)
+            let descendants = await Self.collectDescendants(of: pid)
 
             for child in descendants { kill(child, SIGTERM) }
             task.terminate()
@@ -512,34 +512,26 @@ struct ProcessRunner {
             try? await Task.sleep(nanoseconds: 100_000_000)
         }
 
-        private static func collectDescendants(of pid: pid_t) -> [pid_t] {
+        private static func collectDescendants(of pid: pid_t) async -> [pid_t] {
             var result: [pid_t] = []
             var stack: [pid_t] = [pid]
             while let current = stack.popLast() {
-                let children = directChildren(of: current)
+                let children = await directChildren(of: current)
                 result.append(contentsOf: children)
                 stack.append(contentsOf: children)
             }
             return result
         }
 
-        private static func directChildren(of pid: pid_t) -> [pid_t] {
-            let probe = Process()
-            probe.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
-            probe.arguments = ["-P", "\(pid)"]
-            let pipe = Pipe()
-            probe.standardOutput = pipe
-            probe.standardError = Pipe()
-            do {
-                try probe.run()
-                probe.waitUntilExit()
-                let data = pipe.fileHandleForReading.readDataToEndOfFile()
-                guard let text = String(data: data, encoding: .utf8) else { return [] }
-                return text.split(separator: "\n").compactMap {
-                    pid_t($0.trimmingCharacters(in: .whitespaces))
-                }
-            } catch {
-                return []
+        private static func directChildren(of pid: pid_t) async -> [pid_t] {
+            guard let result = try? await ProcessRunner.execute(
+                executable: "/usr/bin/pgrep",
+                args: ["-P", "\(pid)"],
+                timeout: 5
+            ) else { return [] }
+            guard let text = String(data: result.stdout, encoding: .utf8) else { return [] }
+            return text.split(separator: "\n").compactMap {
+                pid_t($0.trimmingCharacters(in: .whitespaces))
             }
         }
     }
@@ -589,6 +581,12 @@ struct ProcessRunner {
     // MARK: One-shot
 
     /// Runs a one-shot pymobiledevice3 command.
+    func run(args: [String], timeout: TimeInterval = 30) async throws -> ProcessResult {
+        let path = try locatePymobiledevice3()
+        return try await Self.execute(executable: path, args: args, timeout: timeout)
+    }
+
+    /// Generic one-shot executor for ANY executable (adb, xcrun, pgrep, ...).
     /// - The termination handler is installed BEFORE launch so a fast-exiting
     ///   process can never terminate before the handler exists (which would
     ///   leave the await hanging forever).
@@ -596,8 +594,14 @@ struct ProcessRunner {
     ///   draining after exit deadlocks once output exceeds the 64 KB pipe buffer.
     /// - `timeout` bounds the wait; on expiry the process is SIGKILLed and
     ///   the call throws, so a hung command can't wedge its caller.
-    func run(args: [String], timeout: TimeInterval = 30) async throws -> ProcessResult {
-        let task = try makeTask(args: args)
+    static func execute(
+        executable: String,
+        args: [String],
+        timeout: TimeInterval = 30
+    ) async throws -> ProcessResult {
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: executable)
+        task.arguments = args
         let outPipe = Pipe()
         let errPipe = Pipe()
         task.standardInput = Pipe()
@@ -810,25 +814,13 @@ enum TunneldSupervisor {
     private static let logger = AppLogger.shared
 
     static func isRunning() async -> Bool {
-        await withCheckedContinuation { cont in
-            DispatchQueue.global().async {
-                let task = Process()
-                task.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
-                task.arguments = ["-f", "pymobiledevice3 remote tunneld"]
-                let pipe = Pipe()
-                task.standardOutput = pipe
-                task.standardError = Pipe()
-                do {
-                    try task.run()
-                    task.waitUntilExit()
-                    let data = pipe.fileHandleForReading.readDataToEndOfFile()
-                    let pids = String(data: data, encoding: .utf8) ?? ""
-                    cont.resume(returning: !pids.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                } catch {
-                    cont.resume(returning: false)
-                }
-            }
-        }
+        guard let result = try? await ProcessRunner.execute(
+            executable: "/usr/bin/pgrep",
+            args: ["-f", "pymobiledevice3 remote tunneld"],
+            timeout: 10
+        ) else { return false }
+        let pids = String(decoding: result.stdout, as: UTF8.self)
+        return !pids.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     /// Polls `url` until it returns 2xx. Throws AppError.tunneldNotReady on timeout.
