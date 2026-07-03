@@ -68,6 +68,17 @@ final class MobileDeviceClient: ObservableObject {
     /// Currently running long-lived process (GPX play). At most one.
     private var currentLongRunning: ProcessRunner.LongRunningHandle?
 
+    /// Currently running persistent `dvt simulate-location set` process. On
+    /// iOS 17+ the simulated location lives only while its DVT connection is
+    /// open — the set command blocks by design (sigwait in wait_return()), so
+    /// it must be kept running, not run one-shot. Killing it lets locationd
+    /// revert to the real position (observably: as soon as the screen locks).
+    private var currentLocationSetHandle: ProcessRunner.LongRunningHandle?
+
+    /// Supersession guard for concurrent setLocation calls: a slow DVT connect
+    /// must not overwrite the handle of a newer set that raced past it.
+    private var locationSetGeneration = 0
+
     /// Last time tunneld's HTTP endpoint was confirmed reachable. `.ready` is
     /// a cache — tunneld can die behind our back, so ensureTunneldRunning()
     /// re-probes at most once per `tunneldProbeInterval`.
@@ -139,15 +150,45 @@ final class MobileDeviceClient: ObservableObject {
     // MARK: - Location commands
 
     func setLocation(_ coord: CLLocationCoordinate2D, transport: Transport) async throws {
-        if case .rsd = transport {
+        switch transport {
+        case .legacy:
+            // The pre-iOS-17 service persists the location device-side, so a
+            // one-shot process is correct here.
+            let args = locationSetArgs(coord, transport: transport)
+            let result = try await processRunner.run(args: args, timeout: 15)
+            try classifyResult(result, context: .setLocation)
+
+        case .rsd:
             try await ensureTunneldRunning()
+            locationSetGeneration += 1
+            let generation = locationSetGeneration
+
+            await currentLocationSetHandle?.stop()
+            currentLocationSetHandle = nil
+
+            let args = locationSetArgs(coord, transport: transport)
+            let handle = try await processRunner.runUntilStdoutReady(
+                args: args,
+                timeout: 15,
+                context: .setLocation,
+                onTermination: { code in
+                    AppLogger.shared.debug("Persistent simulate-location set exited (code \(code))")
+                }
+            )
+            if generation == locationSetGeneration {
+                currentLocationSetHandle = handle
+            } else {
+                // A newer set superseded us while we were connecting.
+                await handle.stop()
+            }
         }
-        let args = locationSetArgs(coord, transport: transport)
-        let result = try await processRunner.run(args: args, timeout: 15)
-        try classifyResult(result, context: .setLocation)
     }
 
     func clearLocation(transport: Transport) async throws {
+        // Release the persistent set holder before anything else — a thrown
+        // tunneld error below must not leave it orphaned.
+        await currentLocationSetHandle?.stop()
+        currentLocationSetHandle = nil
         if case .rsd = transport {
             try await ensureTunneldRunning()
         }
@@ -166,9 +207,13 @@ final class MobileDeviceClient: ObservableObject {
         if case .rsd = transport {
             try await ensureTunneldRunning()
         }
-        // Stop any previously running long-running task first.
+        // Stop any previously running long-running task first — including a
+        // persistent single-point set holder, so at most one process drives
+        // the device's location.
         await currentLongRunning?.stop()
         currentLongRunning = nil
+        await currentLocationSetHandle?.stop()
+        currentLocationSetHandle = nil
 
         let args = locationPlayArgs(url, transport: transport)
         let handle = try processRunner.runDiscardingOutput(args: args, onTermination: onTermination)
@@ -519,6 +564,119 @@ struct ProcessRunner {
             let first = await group.next() ?? false
             group.cancelAll()
             return first
+        }
+    }
+
+    // MARK: Long-running with readiness signal
+
+    /// Launches a command that signals success by printing to stdout and then
+    /// stays alive. pymobiledevice3 `dvt simulate-location set` prints its
+    /// wait banner only AFTER the location has been applied, so first stdout
+    /// output is a reliable readiness marker.
+    /// - Returns the live handle once ready.
+    /// - Throws the stderr-classified AppError if the process exits before
+    ///   signalling readiness, or `commandTimedOut` if neither happens within
+    ///   `timeout` (the process is SIGKILLed on expiry).
+    func runUntilStdoutReady(
+        args: [String],
+        timeout: TimeInterval,
+        context: AppError.Context,
+        onTermination: ((Int32) -> Void)? = nil
+    ) async throws -> LongRunningHandle {
+        let task = try makeTask(args: args)
+        // pymobiledevice3 prints the readiness banner with a plain `print`;
+        // Python block-buffers stdout on pipes, so without this the banner
+        // never reaches us and every call would time out.
+        var env = ProcessInfo.processInfo.environment
+        env["PYTHONUNBUFFERED"] = "1"
+        task.environment = env
+        let outPipe = Pipe()
+        let errPipe = Pipe()
+        task.standardInput = FileHandle.nullDevice
+        task.standardOutput = outPipe
+        task.standardError = errPipe
+
+        let (events, continuation) = AsyncStream.makeStream(of: LaunchEvent.self)
+        let stderrBuffer = BoundedDataBuffer()
+
+        errPipe.fileHandleForReading.readabilityHandler = { fh in
+            let data = fh.availableData
+            if data.isEmpty { fh.readabilityHandler = nil; return }
+            stderrBuffer.append(data)
+        }
+        outPipe.fileHandleForReading.readabilityHandler = { fh in
+            let data = fh.availableData
+            if data.isEmpty { fh.readabilityHandler = nil; return }
+            continuation.yield(.ready)
+        }
+        // Installed BEFORE launch so a fast-exiting process can never
+        // terminate before the handler exists.
+        task.terminationHandler = { proc in
+            continuation.yield(.exited)
+            continuation.finish()
+            onTermination?(proc.terminationStatus)
+        }
+
+        try task.run()
+
+        switch await Self.waitForFirstEvent(events, timeout: timeout) {
+        case .ready:
+            return LongRunningHandle(task)
+        case .exited:
+            // Give the stderr readability handler a beat to drain the tail.
+            try? await Task.sleep(nanoseconds: 150_000_000)
+            throw AppError.from(stderr: stderrBuffer.data, context: context)
+        case nil:
+            kill(task.processIdentifier, SIGKILL)
+            throw AppError.commandTimedOut(
+                command: args.prefix(2).joined(separator: " "),
+                seconds: Int(timeout)
+            )
+        }
+    }
+
+    private enum LaunchEvent: Sendable { case ready, exited }
+
+    /// Returns the first event, or nil if `timeout` expires (or the stream
+    /// finishes) first.
+    private static func waitForFirstEvent(
+        _ stream: AsyncStream<LaunchEvent>,
+        timeout: TimeInterval
+    ) async -> LaunchEvent? {
+        await withTaskGroup(of: LaunchEvent?.self) { group in
+            group.addTask {
+                for await event in stream { return event }
+                return nil
+            }
+            group.addTask {
+                try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+                return nil
+            }
+            let first = await group.next() ?? nil
+            group.cancelAll()
+            return first
+        }
+    }
+
+    /// Thread-safe stderr accumulator for readability handlers (which fire on
+    /// a private FileHandle queue). Capped so a chatty process can't grow it
+    /// unboundedly.
+    private final class BoundedDataBuffer: @unchecked Sendable {
+        private let lock = NSLock()
+        private var storage = Data()
+        private static let cap = 64 * 1024
+
+        func append(_ data: Data) {
+            lock.lock()
+            defer { lock.unlock() }
+            guard storage.count < Self.cap else { return }
+            storage.append(data.prefix(Self.cap - storage.count))
+        }
+
+        var data: Data {
+            lock.lock()
+            defer { lock.unlock() }
+            return storage
         }
     }
 
