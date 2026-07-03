@@ -184,7 +184,7 @@ final class MobileDeviceClient: ObservableObject {
     private func locationPlayArgs(_ url: URL, transport: Transport) -> [String] {
         switch transport {
         case .legacy(let udid):
-            return ["developer", "simulate-location", "play",
+            return ["developer", "dvt", "simulate-location", "play",
                     "--udid", udid, url.path]
         case .rsd(let udid):
             return ["developer", "dvt", "simulate-location", "play",
