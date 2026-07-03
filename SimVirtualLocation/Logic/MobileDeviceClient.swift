@@ -64,6 +64,12 @@ final class MobileDeviceClient: ObservableObject {
     /// Currently running long-lived process (GPX play). At most one.
     private var currentLongRunning: ProcessRunner.LongRunningHandle?
 
+    /// Last time tunneld's HTTP endpoint was confirmed reachable. `.ready` is
+    /// a cache — tunneld can die behind our back, so ensureTunneldRunning()
+    /// re-probes at most once per `tunneldProbeInterval`.
+    private var lastTunneldProbe: Date = .distantPast
+    private static let tunneldProbeInterval: TimeInterval = 10
+
     // MARK: - Init
 
     init() {}
@@ -206,12 +212,23 @@ final class MobileDeviceClient: ObservableObject {
     private let tunneldHostURL = URL(string: "http://127.0.0.1:49151/")!
 
     func ensureTunneldRunning() async throws {
-        if case .ready = tunneldStatus { return }
+        if case .ready = tunneldStatus {
+            if Date().timeIntervalSince(lastTunneldProbe) < Self.tunneldProbeInterval {
+                return
+            }
+            if await TunneldSupervisor.isReachable(url: tunneldHostURL) {
+                lastTunneldProbe = Date()
+                return
+            }
+            logger.warn("tunneld no longer reachable; relaunching")
+            tunneldStatus = .idle
+        }
 
         if await TunneldSupervisor.isRunning() {
             logger.info("tunneld already running, polling for HTTP readiness")
             tunneldStatus = .launching
             try await TunneldSupervisor.waitForReady(url: tunneldHostURL, timeout: 30.0)
+            lastTunneldProbe = Date()
             tunneldStatus = .ready
             logger.info("tunneld is ready")
             return
@@ -233,6 +250,7 @@ final class MobileDeviceClient: ObservableObject {
             tunneldStatus = .failed("Not ready within 30s")
             throw AppError.tunneldNotReady
         }
+        lastTunneldProbe = Date()
         tunneldStatus = .ready
         logger.info("tunneld launched and ready")
     }
@@ -285,6 +303,7 @@ final class MobileDeviceClient: ObservableObject {
             tunneldStatus = .failed("Not ready within 30s")
             throw AppError.tunneldNotReady
         }
+        lastTunneldProbe = Date()
         tunneldStatus = .ready
     }
 }
@@ -603,7 +622,7 @@ enum TunneldSupervisor {
         logger.info("tunneld force-restarted as root")
     }
 
-    private static func isReachable(url: URL) async -> Bool {
+    static func isReachable(url: URL) async -> Bool {
         var req = URLRequest(url: url)
         req.timeoutInterval = 1.5
         req.httpMethod = "GET"
