@@ -27,6 +27,7 @@ enum AppError: Error {
     case developerModeDisabled
     case noBootedSimulators
     case noRouteToHost
+    case tunnelConnectionLost(String)
     case mountFailed(String)
     case alreadyMounted
 
@@ -87,6 +88,8 @@ extension AppError {
             return "No booted simulators found"
         case .noRouteToHost:
             return "Tunnel disconnected (No route to host). Please restart the device connection."
+        case .tunnelConnectionLost(let m):
+            return "Tunnel connection lost: \(m)"
         case .mountFailed(let m):
             return "Mount Developer Image failed: \(m)"
         case .alreadyMounted:
@@ -113,7 +116,7 @@ extension AppError {
     /// lives in one place instead of scattered string comparisons.
     var isTunnelDrop: Bool {
         switch self {
-        case .noRouteToHost, .tunneldNotReady:
+        case .noRouteToHost, .tunneldNotReady, .tunnelConnectionLost:
             return true
         default:
             return false
@@ -145,6 +148,23 @@ extension AppError {
         }
         if text.contains("No route to host") {
             return .noRouteToHost
+        }
+        let lower = text.lowercased()
+        let tunnelDropPatterns = [
+            "connection refused",
+            "connectionreseterror",
+            "connectionabortederror",
+            "broken pipe",
+            "errno 61",
+            "errno 54",
+            "errno 32",
+            "failed to connect to tunneld",
+            "tunneld is not running",
+            "device is not connected",
+        ]
+        if tunnelDropPatterns.contains(where: { lower.contains($0) }) {
+            let firstLine = text.components(separatedBy: .newlines).first ?? text
+            return .tunnelConnectionLost(firstLine)
         }
         if text.range(of: "DeviceLocked", options: .caseInsensitive) != nil {
             return .deviceLocked
