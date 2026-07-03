@@ -48,7 +48,7 @@ SwiftUI macOS app (11+) for spoofing iOS/Android device GPS. External tools do t
 
 1. `simulateRoute()` / `simulateFromAToB()` build `tracks` (visual puck path) and `currentPolyline` (full GPX source).
 2. `kickoffGPXPlaybackIfNeeded()` → `GPXGenerator.render(...)` writes the file → `GPXPlayback.start(...)` launches `pymobiledevice3 ... simulate-location play`.
-3. The local 0.1 s movement timer skips `run(location:)` when `gpxPlayback.isPlaying == true` to avoid double-driving the device.
+3. The local 0.1 s movement timer skips `run(location:)` while `shouldUseGPXPlayback` is true (device path) so the play process and the per-tick sender never double-drive the device. If the play process dies unexpectedly, `GPXPlayback.onUnexpectedExit` → `handleGPXPlaybackUnexpectedExit()` recovers the tunnel if needed and restarts playback from the puck's current position (max 3 consecutive restarts).
 4. Speed slider changes trigger a 0.4 s debounce → `remainingPolyline()` from the puck's current position → new GPX written → old process SIGTERMed → new process started. The puck does not jump back to A.
 5. iOS Simulator and Android use per-tick `set` calls instead (no GPX equivalent).
 

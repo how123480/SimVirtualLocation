@@ -61,6 +61,10 @@ final class MobileDeviceClient: ObservableObject {
     private let processRunner = ProcessRunner()
     private let logger = AppLogger.shared
 
+    /// Summary of the last device list logged at info level; the 30 s health
+    /// check calls listDevices() constantly, so repeats drop to debug.
+    private var lastLoggedDeviceSummary: String?
+
     /// Currently running long-lived process (GPX play). At most one.
     private var currentLongRunning: ProcessRunner.LongRunningHandle?
 
@@ -84,7 +88,13 @@ final class MobileDeviceClient: ObservableObject {
         let devices = try JSONDecoder().decode([Device].self, from: result.stdout)
         var seen: Set<String> = []
         let unique = devices.filter { seen.insert($0.id).inserted && $0.isUSB }
-        logger.info("Connected USB devices: \(unique.map { "\($0.name) (\($0.version))" }.joined(separator: ", "))")
+        let summary = unique.map { "\($0.name) (\($0.version))" }.joined(separator: ", ")
+        if summary != lastLoggedDeviceSummary {
+            lastLoggedDeviceSummary = summary
+            logger.info("Connected USB devices: \(summary)")
+        } else {
+            logger.debug("Connected USB devices unchanged")
+        }
         return unique
     }
 

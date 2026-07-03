@@ -706,10 +706,12 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
     private func stopLegacyDevice() async {
         await killAllActiveProcesses()
         simulationStatus = .idle
-        do {
-            try await client.clearLocation(transport: .legacy(udid: selectedDevice))
-        } catch {
-            errorHandler.handle(error)
+        if !selectedDevice.isEmpty {
+            do {
+                try await client.clearLocation(transport: .legacy(udid: selectedDevice))
+            } catch {
+                errorHandler.handle(error)
+            }
         }
         await client.killResidualSimulationProcesses()
 
@@ -722,10 +724,12 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
     func stopRSDTunnel() async {
         await killAllActiveProcesses()
         simulationStatus = .idle
-        do {
-            try await client.clearLocation(transport: .rsd(udid: selectedDevice))
-        } catch {
-            errorHandler.handle(error)
+        if !selectedDevice.isEmpty {
+            do {
+                try await client.clearLocation(transport: .rsd(udid: selectedDevice))
+            } catch {
+                errorHandler.handle(error)
+            }
         }
         await client.killResidualSimulationProcesses()
 
