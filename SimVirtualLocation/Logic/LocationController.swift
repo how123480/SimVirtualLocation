@@ -452,6 +452,7 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
         // Idempotent: a second call while already stopping is a no-op.
         guard simulationStatus.isMockingActive else { return }
         simulationStatus = .stopping
+        let stopStarted = Date()
 
         await killAllActiveProcesses()
 
@@ -476,7 +477,7 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
             mapView.mkMapView.removeAnnotations(mapView.mkMapView.annotations)
             annotations = []
         }
-        logger.info("Simulation stopped")
+        logger.info(String(format: "Simulation stopped (%.2fs)", Date().timeIntervalSince(stopStarted)))
         simulationStatus = .idle
     }
 
@@ -651,6 +652,7 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
             return
         }
         Task { @MainActor in
+            logger.info("Starting device connection: \(selectedDevice), useRSD=\(useRSD)")
             self.deviceStatus = .checkingDeveloperMode
             do {
                 let enabled = try await client.checkDeveloperMode(udid: selectedDevice)
@@ -701,6 +703,7 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
                     // while the warm-up was connecting — don't leave an
                     // orphaned helper bound to a dead tunnel.
                     if !self.deviceStatus.isReady || self.selectedDevice != udid {
+                        self.logger.info("Device disconnected during helper warm-up; shutting helper down")
                         await self.client.shutdownLocationHelper()
                     }
                 }
@@ -720,6 +723,7 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
     }
 
     private func stopLegacyDevice() async {
+        logger.info("Stopping device (legacy)")
         await killAllActiveProcesses()
         simulationStatus = .idle
         if !selectedDevice.isEmpty {
@@ -741,6 +745,7 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
     }
 
     func stopRSDTunnel() async {
+        logger.info("Stopping device (RSD)")
         await killAllActiveProcesses()
         simulationStatus = .idle
         if !selectedDevice.isEmpty {

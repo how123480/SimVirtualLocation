@@ -249,11 +249,15 @@ final class MobileDeviceClient: ObservableObject {
         if helperClient.isRunning, helperClient.servedUDID != udid {
             // The helper is bound to a different device (picker switch
             // without a stop) — never route commands to the wrong phone.
+            logger.info("Location helper bound to a different device; restarting it for \(udid)")
             await helperClient.shutdown()
         }
         do {
             if !helperClient.isRunning {
-                guard Date() >= helperStartCooldownUntil else { return false }
+                guard Date() >= helperStartCooldownUntil else {
+                    logger.debug("Location helper start in cooldown; using CLI fallback")
+                    return false
+                }
                 do {
                     let path = try processRunner.locatePymobiledevice3()
                     try await helperClient.start(udid: udid, pymobiledevice3Path: path)
@@ -294,6 +298,7 @@ final class MobileDeviceClient: ObservableObject {
         }
         // A clear on a fresh connection is a harmless no-op; it exists purely
         // to establish the DVT session so the first real command is instant.
+        logger.info("Warming up location helper for \(udid)")
         _ = await helperSetOrClear(nil, udid: udid)
     }
 
