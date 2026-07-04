@@ -275,6 +275,34 @@ struct LiveStatusPill: View {
     }
 }
 
+// MARK: - Empty state
+
+/// Unified empty-state block for lists and popovers: SF Symbol, short title,
+/// optional hint line. Centered; callers add frames/padding for their context.
+struct PanelEmptyState: View {
+    let icon: String
+    let title: String
+    var hint: String? = nil
+
+    var body: some View {
+        VStack(spacing: 6) {
+            Image(systemName: icon)
+                .font(.title3)
+                .foregroundColor(PanelTheme.textTertiary)
+            Text(title)
+                .font(.caption)
+                .foregroundColor(PanelTheme.textSecondary)
+            if let hint = hint {
+                Text(hint)
+                    .font(.caption2)
+                    .foregroundColor(PanelTheme.textTertiary)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 20)
+    }
+}
+
 // MARK: - Container backgrounds
 
 /// Subtle rounded container used for grouped content (saved locations, etc.).

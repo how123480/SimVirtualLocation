@@ -27,7 +27,7 @@ struct ManageLabelsView: View {
             footer
         }
         .frame(width: 340, height: 420)
-        .alert("Rename label", isPresented: Binding(
+        .alert("Rename Label", isPresented: Binding(
             get: { renameTarget != nil },
             set: { if !$0 { renameTarget = nil } }
         )) {
@@ -76,15 +76,12 @@ struct ManageLabelsView: View {
     @ViewBuilder
     private var listBody: some View {
         if locationController.locationLabels.isEmpty {
-            VStack(spacing: 6) {
-                Image(systemName: "tag")
-                    .font(.title3)
-                    .foregroundColor(PanelTheme.textTertiary)
-                Text("No labels yet")
-                    .font(.caption)
-                    .foregroundColor(PanelTheme.textSecondary)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            PanelEmptyState(
+                icon: "tag",
+                title: "No labels yet",
+                hint: "Add a label above"
+            )
+            .frame(maxHeight: .infinity)
         } else {
             ScrollView {
                 LazyVStack(spacing: 4) {

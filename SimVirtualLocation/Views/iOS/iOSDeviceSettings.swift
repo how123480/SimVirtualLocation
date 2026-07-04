@@ -116,7 +116,8 @@ struct iOSDeviceSettings: View {
         VStack(alignment: .leading, spacing: 0) {
             if isDeviceMode {
                 if locationController.connectedDevices.isEmpty {
-                    pickerEmptyState(
+                    PanelEmptyState(
+                        icon: "iphone.slash",
                         title: "No devices found",
                         hint: "Connect an iPhone via USB"
                     )
@@ -130,7 +131,8 @@ struct iOSDeviceSettings: View {
                 }
             } else {
                 if locationController.bootedSimulators.isEmpty {
-                    pickerEmptyState(
+                    PanelEmptyState(
+                        icon: "laptopcomputer.and.iphone",
                         title: "No booted simulators",
                         hint: "Boot a simulator in Xcode"
                     )
@@ -166,7 +168,7 @@ struct iOSDeviceSettings: View {
                     Spacer()
                 }
                 .foregroundColor(PanelTheme.textSecondary)
-                .padding(.horizontal, 12)
+                .padding(.horizontal, 10)
                 .padding(.vertical, 8)
                 .contentShape(Rectangle())
             }
@@ -214,19 +216,6 @@ struct iOSDeviceSettings: View {
             .padding(.vertical, 6)
         }
         .frame(maxHeight: 220)
-    }
-
-    private func pickerEmptyState(title: String, hint: String) -> some View {
-        VStack(spacing: 4) {
-            Text(title)
-                .font(.callout)
-                .foregroundColor(PanelTheme.textSecondary)
-            Text(hint)
-                .font(.caption)
-                .foregroundColor(PanelTheme.textTertiary)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 18)
     }
 
     // MARK: - Connect button

@@ -428,10 +428,19 @@ struct Alert: ViewModifier {
     let isPresented: Binding<Bool>
     let text: String
 
+    /// Alert title = app display name (product name differs between build
+    /// configs); the actual message goes in the body, per HIG — messages can
+    /// be long error strings and must not render as a bold wrapping title.
+    private var appName: String {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String ?? "SimVirtualLocation"
+    }
+
     func body(content: Content) -> some View {
         content
-            .alert(text, isPresented: isPresented) {
+            .alert(appName, isPresented: isPresented) {
                 Button("OK", role: .cancel) {}
+            } message: {
+                Text(text)
             }
     }
 }

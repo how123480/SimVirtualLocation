@@ -103,6 +103,12 @@ The control panel follows a strict macOS-native visual language. Reuse the exist
 - `PanelContainer<Content>` — rounded subtle-fill container with hairline border (used for transient forms like the add-location form).
 - `LiveStatusPill` — capsule with a colored dot. `pulses: Bool` for active states (default true), `isLoading: Bool` replaces the dot with a spinner. Used for the simulation state on the SIMULATION section header.
 - `MapOverlayChrome` (`.mapOverlayChrome()`) — unified chrome for everything floating over the map (search bar, results, zoom cluster, panel toggle, debug log).
+- `PanelEmptyState` — unified empty-state block (icon + caption title + optional caption2 hint) for every empty list/popover. No ad-hoc empty-state VStacks.
+
+**Dialog conventions** (alerts/popovers must follow these):
+- Alert titles are short Title Case phrases ("Rename Location", "Enter Coordinates") — never interpolate user content or long messages into the title. The global alert (`Alert` modifier in ContentView) titles with the app's `CFBundleName` and puts `alertText` in the `message:` body.
+- Input alerts: affirmative button first (verb matching the action: Set / Rename / Add), then `Button("Cancel", role: .cancel)`. Rename TextField placeholder is always "Name" (field is prefilled with the current name).
+- Popovers: row list → `Divider()` → one subtle utility footer row ("Manage Labels…", "Refresh List"); rows use `.padding(.horizontal, 10).padding(.vertical, 6)`; empty content uses `PanelEmptyState`.
 
 **Spacing rhythm:** every top-level section in the control panel uses `.padding(.vertical, 14)`, with `PanelDivider` between sections. Do not introduce one-off paddings; keep the rhythm consistent.
 

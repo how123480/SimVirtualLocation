@@ -121,7 +121,7 @@ struct LocationSettingsPanel: View {
             }
             .alert("Enter Coordinates", isPresented: $locationController.isShowingDialog) {
                 TextField("Latitude, Longitude", text: $latitudeLongitude)
-                Button("Move") {
+                Button("Set") {
                     locationController.setToCoordinate(latLngString: latitudeLongitude)
                 }
                 Button("Cancel", role: .cancel) {}

@@ -35,8 +35,8 @@ struct LocationsView: View {
             }
             locationList
         }
-        .alert("Rename \(selectedLocation.name)", isPresented: $renameAlertShowing) {
-            TextField("New name", text: $updatedName)
+        .alert("Rename Location", isPresented: $renameAlertShowing) {
+            TextField("Name", text: $updatedName)
             Button("Rename") { locationController.update(selectedLocation, with: updatedName) }
             Button("Cancel", role: .cancel) {}
         }
@@ -167,18 +167,16 @@ struct LocationsView: View {
     @ViewBuilder
     private var locationList: some View {
         if locationController.savedLocations.isEmpty {
-            emptyState
+            PanelEmptyState(
+                icon: "mappin.slash",
+                title: "No saved locations",
+                hint: "Tap + to add, or use \"Save Point A\""
+            )
         } else if filteredLocations.isEmpty {
-            VStack(spacing: 6) {
-                Image(systemName: "line.3.horizontal.decrease.circle")
-                    .font(.title3)
-                    .foregroundColor(PanelTheme.textTertiary)
-                Text("No locations under this label")
-                    .font(.caption)
-                    .foregroundColor(PanelTheme.textSecondary)
-            }
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 20)
+            PanelEmptyState(
+                icon: "line.3.horizontal.decrease.circle",
+                title: "No locations under this label"
+            )
         } else {
             ScrollView {
                 LazyVStack(spacing: 4) {
@@ -206,21 +204,6 @@ struct LocationsView: View {
         }
     }
 
-    private var emptyState: some View {
-        VStack(spacing: 6) {
-            Image(systemName: "mappin.slash")
-                .font(.title3)
-                .foregroundColor(PanelTheme.textTertiary)
-            Text("No saved locations")
-                .font(.caption)
-                .foregroundColor(PanelTheme.textSecondary)
-            Text("Tap + to add, or use \"Save Point A\"")
-                .font(.caption2)
-                .foregroundColor(PanelTheme.textTertiary)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 20)
-    }
 }
 
 // MARK: - Filter chip
@@ -350,15 +333,11 @@ private struct LabelPickerPopover: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             if allLabels.isEmpty {
-                VStack(spacing: 6) {
-                    Image(systemName: "tag")
-                        .font(.title3)
-                        .foregroundColor(PanelTheme.textTertiary)
-                    Text("No labels yet")
-                        .font(.caption)
-                        .foregroundColor(PanelTheme.textSecondary)
-                }
-                .frame(width: 200, height: 80)
+                PanelEmptyState(
+                    icon: "tag",
+                    title: "No labels yet",
+                    hint: "Add labels in Manage Labels…"
+                )
             } else {
                 ScrollView {
                     VStack(spacing: 2) {
@@ -376,7 +355,7 @@ private struct LabelPickerPopover: View {
                                     Spacer()
                                 }
                                 .padding(.horizontal, 10)
-                                .padding(.vertical, 5)
+                                .padding(.vertical, 6)
                                 .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
@@ -384,7 +363,7 @@ private struct LabelPickerPopover: View {
                     }
                     .padding(.vertical, 6)
                 }
-                .frame(width: 220, height: min(CGFloat(allLabels.count) * 28 + 12, 240))
+                .frame(height: min(CGFloat(allLabels.count) * 30 + 12, 240))
             }
             Divider()
             Button(action: onManage) {
@@ -402,5 +381,6 @@ private struct LabelPickerPopover: View {
             }
             .buttonStyle(.plain)
         }
+        .frame(width: 220)
     }
 }
