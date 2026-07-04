@@ -149,6 +149,11 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
     private let mapView: MapView
     private let runner = Runner()
     private let client = MobileDeviceClient()
+    private let usbmuxWatcher = UsbmuxWatcher()
+
+    /// Debounce for usbmux-event-driven refreshes; a replug emits several
+    /// events in a burst and each one cancels and reschedules this task.
+    private var deviceListRefreshTask: Task<Void, Never>?
     private lazy var recovery = TunnelRecoveryCoordinator(client: client)
     private lazy var gpxPlayback: GPXPlayback = {
         let playback = GPXPlayback(client: client)
@@ -211,6 +216,7 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
     private var healthCheckFailureStreak: Int = 0
     private static let healthCheckInterval: TimeInterval = 30.0
     private static let healthCheckFailureThreshold = 2
+    private static let deviceListRefreshDebounce: TimeInterval = 0.8
 
     // MARK: - Init
 
@@ -248,6 +254,11 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
         Task { @MainActor in
             await refreshDevices()
 
+            usbmuxWatcher.onDeviceListChanged = { [weak self] in
+                self?.scheduleAutoDeviceRefresh()
+            }
+            usbmuxWatcher.start()
+
             xcodePath = defaults.string(forKey: Constants.defaultsXcodePathKey) ?? "/Applications/Xcode.app"
 
             loadLocations()
@@ -259,14 +270,21 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
     func refreshDevices() async {
         if showSimulatorOption {
             bootedSimulators = (try? await getBootedSimulators()) ?? []
-            selectedSimulator = bootedSimulators.first?.id ?? ""
+            if !bootedSimulators.contains(where: { $0.id == selectedSimulator }) {
+                selectedSimulator = bootedSimulators.first?.id ?? ""
+            }
         } else {
             bootedSimulators = []
             selectedSimulator = ""
         }
 
         connectedDevices = (try? await getConnectedDevices()) ?? []
-        selectedDevice = connectedDevices.first?.id ?? ""
+        // Keep the current selection while it exists; while a connection is
+        // active never touch it at all — the health check owns teardown and
+        // still needs the udid even if the device just vanished from the list.
+        if !connectedDevices.contains(where: { $0.id == selectedDevice }) && !deviceStatus.isActive {
+            selectedDevice = connectedDevices.first?.id ?? ""
+        }
     }
 
     func setCurrentLocation() {
@@ -1113,6 +1131,16 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
     private func saveSavedLocations() {
         if let data = try? JSONEncoder().encode(savedLocations) {
             defaults.set(data, forKey: Constants.defaultsSavedLocationsPathKey)
+        }
+    }
+
+    private func scheduleAutoDeviceRefresh() {
+        deviceListRefreshTask?.cancel()
+        deviceListRefreshTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(Self.deviceListRefreshDebounce * 1_000_000_000))
+            guard let self, !Task.isCancelled else { return }
+            self.logger.debug("usbmux event: auto-refreshing device list")
+            await self.refreshDevices()
         }
     }
 
