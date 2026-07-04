@@ -153,23 +153,33 @@ struct PanelIconButton: View {
     let icon: String
     let help: String
     var color: Color = PanelTheme.textSecondary
+    var isLoading: Bool = false
+    var disabled: Bool = false
     let action: () -> Void
 
     @State private var isHovered = false
 
     var body: some View {
         Button(action: action) {
-            Image(systemName: icon)
-                .font(.system(size: 12, weight: .medium))
-                .foregroundColor(color)
-                .frame(width: 22, height: 22)
-                .background(
-                    RoundedRectangle(cornerRadius: 5, style: .continuous)
-                        .fill(isHovered ? PanelTheme.buttonFill : .clear)
-                )
-                .contentShape(Rectangle())
+            Group {
+                if isLoading {
+                    ProgressView().controlSize(.mini)
+                } else {
+                    Image(systemName: icon)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(color)
+                }
+            }
+            .frame(width: 22, height: 22)
+            .background(
+                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    .fill(isHovered && !disabled ? PanelTheme.buttonFill : .clear)
+            )
+            .contentShape(Rectangle())
+            .opacity(disabled ? 0.45 : 1.0)
         }
         .buttonStyle(.plain)
+        .disabled(disabled)
         .help(help)
         .onHover { isHovered = $0 }
     }

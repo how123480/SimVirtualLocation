@@ -18,11 +18,6 @@ struct LocationSettingsPanel: View {
         !locationController.deviceStatus.isReady
     }
 
-    private var isGPXPath: Bool {
-        locationController.deviceMode == .device &&
-        locationController.deviceStatus.isReady
-    }
-
     private var isRouteActive: Bool {
         switch locationController.simulationStatus {
         case .route, .fromAToB, .routePaused, .fromAToBPaused: return true
@@ -119,22 +114,9 @@ struct LocationSettingsPanel: View {
     }
 
     private var saveIconButton: some View {
-        Button {
+        PanelIconButton(icon: "square.and.arrow.down", help: "Save Point A") {
             locationController.savePointA()
-        } label: {
-            Image(systemName: "square.and.arrow.down")
-                .font(.system(size: 13, weight: .medium))
-                .foregroundColor(PanelTheme.textPrimary)
-                .frame(width: 30, height: 26)
-                .background(PanelTheme.buttonFill)
-                .clipShape(RoundedRectangle(cornerRadius: PanelTheme.radius, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: PanelTheme.radius, style: .continuous)
-                        .stroke(PanelTheme.separator, lineWidth: 0.5)
-                )
         }
-        .buttonStyle(.plain)
-        .help("Save Point A")
     }
 
     // MARK: - Single-point apply / stop
@@ -157,29 +139,15 @@ struct LocationSettingsPanel: View {
     }
 
     private var stopMockingIconButton: some View {
-        Button {
+        PanelIconButton(
+            icon: "stop.fill",
+            help: "Stop Mocking A",
+            color: .red,
+            isLoading: isStoppingMocking,
+            disabled: isStoppingMocking
+        ) {
             Task { await locationController.stopSimulation(clearAnnotations: false) }
-        } label: {
-            Group {
-                if isStoppingMocking {
-                    ProgressView().controlSize(.small)
-                } else {
-                    Image(systemName: "stop.fill")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundColor(.red)
-                }
-            }
-            .frame(width: 30, height: 26)
-            .background(Color.red.opacity(0.12))
-            .clipShape(RoundedRectangle(cornerRadius: PanelTheme.radius, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: PanelTheme.radius, style: .continuous)
-                    .stroke(Color.red.opacity(0.35), lineWidth: 0.5)
-            )
         }
-        .buttonStyle(.plain)
-        .disabled(isStoppingMocking)
-        .help("Stop Mocking A")
     }
 
     // MARK: - Route section
@@ -191,18 +159,16 @@ struct LocationSettingsPanel: View {
                 HStack(spacing: 8) {
                     simulateRouteButton
                     if isRoutePauseVisible {
-                        pauseResumeIconButton(forFromAToB: false)
+                        pauseResumeIconButton
                     }
                 }
                 HStack(spacing: 8) {
                     atoBButton
                     if isAtoBPauseVisible {
-                        pauseResumeIconButton(forFromAToB: true)
+                        pauseResumeIconButton
                     }
                 }
             }
-
-            Divider()
 
             // Speed slider
             VStack(alignment: .leading, spacing: 4) {
@@ -216,35 +182,7 @@ struct LocationSettingsPanel: View {
                 }
                 Slider(value: $locationController.speed, in: 5...200, step: 5)
                     .controlSize(.small)
-            }
-
-            // Update interval (or GPX note)
-            if isGPXPath {
-                Text("GPX playback — speed updates live without restarting")
-                    .font(.caption)
-                    .foregroundColor(PanelTheme.textSecondary)
-            } else {
-                VStack(alignment: .leading, spacing: 4) {
-                    PanelSectionLabel(text: "Update Interval")
-                    if locationController.useRSD {
-                        Picker("", selection: $locationController.timeScale) {
-                            Text("5 s").tag(5.0)
-                            Text("10 s").tag(10.0)
-                            Text("15 s").tag(15.0)
-                        }
-                        .labelsHidden()
-                        .pickerStyle(.segmented)
-                        .onAppear { locationController.timeScale = 5.0 }
-                    } else {
-                        Picker("", selection: $locationController.timeScale) {
-                            Text("1 s").tag(1.0)
-                            Text("1.5 s").tag(1.5)
-                            Text("2 s").tag(2.0)
-                        }
-                        .labelsHidden()
-                        .pickerStyle(.segmented)
-                    }
-                }
+                    .tint(.accentColor)
             }
         }
     }
@@ -303,32 +241,19 @@ struct LocationSettingsPanel: View {
         return status == .fromAToB || status == .fromAToBPaused
     }
 
-    @ViewBuilder
-    private func pauseResumeIconButton(forFromAToB: Bool) -> some View {
+    private var pauseResumeIconButton: some View {
         let isPaused = locationController.simulationStatus.isPaused
-        let icon = isPaused ? "play.fill" : "pause.fill"
-        let tint: Color = isPaused ? .green : PanelTheme.textPrimary
-        let help = isPaused ? "Resume" : "Pause"
-        Button {
+        return PanelIconButton(
+            icon: isPaused ? "play.fill" : "pause.fill",
+            help: isPaused ? "Resume" : "Pause",
+            color: isPaused ? .green : PanelTheme.textSecondary,
+            disabled: isStopping
+        ) {
             if isPaused {
                 locationController.resumeRouteSimulation()
             } else {
                 Task { await locationController.pauseRouteSimulation() }
             }
-        } label: {
-            Image(systemName: icon)
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundColor(tint)
-                .frame(width: 30, height: 26)
-                .background(PanelTheme.buttonFill)
-                .clipShape(RoundedRectangle(cornerRadius: PanelTheme.radius, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: PanelTheme.radius, style: .continuous)
-                        .stroke(PanelTheme.separator, lineWidth: 0.5)
-                )
         }
-        .buttonStyle(.plain)
-        .disabled(isStopping)
-        .help(help)
     }
 }

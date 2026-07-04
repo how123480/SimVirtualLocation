@@ -102,10 +102,6 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
         return true
     }
 
-    @Published var timeScale: Double = 1.5 {
-        didSet { runner.timeDelay = timeScale }
-    }
-
     /// Logs for UI display (also written to file)
     @Published var logs: [LogEntry] = []
 
@@ -1344,7 +1340,7 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
         case .moveTo(let to, _, _):
             lastTrackLocation = to
             if !isGPXActive,
-               Date().timeIntervalSince(lastRunnerUpdateTime) >= timeScale {
+               Date().timeIntervalSince(lastRunnerUpdateTime) >= Constants.runnerUpdateInterval {
                 run(location: to)
                 lastRunnerUpdateTime = Date()
             }
@@ -1773,7 +1769,7 @@ extension LocationController {
 
         // If simulating, update device location in real-time after throttle
         if simulationStatus.isMockingActive && isDeviceReady,
-           Date().timeIntervalSince(lastRunnerUpdateTime) >= timeScale {
+           Date().timeIntervalSince(lastRunnerUpdateTime) >= Constants.runnerUpdateInterval {
             run(location: newCoord)
             lastRunnerUpdateTime = Date()
         }
@@ -1807,6 +1803,10 @@ extension CLLocation {
 }
 
 private enum Constants {
+    /// Minimum interval (seconds) between per-tick location sends on the
+    /// non-GPX path (iOS Simulator route playback, joystick moves).
+    static let runnerUpdateInterval: TimeInterval = 1.5
+
     static let defaultsSavedLocationsPathKey = "saved_locations"
     static let defaultsLocationLabelsKey = "location_labels"
     static let defaultsXcodePathKey = "xcode_path"

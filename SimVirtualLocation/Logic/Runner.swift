@@ -15,11 +15,6 @@ import CoreLocation
 
 class Runner {
 
-    // MARK: - Public Properties
-
-    /// Minimum interval (seconds) between location updates during route simulation
-    var timeDelay: TimeInterval = 0.5
-
     // MARK: - Private Properties
 
     private let log = AppLogger.shared
