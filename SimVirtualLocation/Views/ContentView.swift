@@ -50,13 +50,7 @@ struct ContentView: View {
                                 }
                                 .frame(width: 400)
                                 .frame(maxHeight: 250)
-                                .background(.ultraThinMaterial)
-                                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                        .stroke(Color(NSColor.separatorColor).opacity(0.5), lineWidth: 0.5)
-                                )
-                                .shadow(color: Color.black.opacity(0.1), radius: 4, x: 0, y: 1)
+                                .mapOverlayChrome()
                                 .padding()
                                 .onChange(of: locationController.logs.count) { _ in
                                     if let lastId = locationController.logs.first?.id {
@@ -94,13 +88,7 @@ struct ContentView: View {
                             locationController.updateMapRegion(force: true)
                         }
                     }
-                    .background(.regularMaterial)
-                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .stroke(Color(NSColor.separatorColor).opacity(0.5), lineWidth: 0.5)
-                    )
-                    .shadow(color: Color.black.opacity(0.1), radius: 4, x: 0, y: 1)
+                    .mapOverlayChrome()
                     .padding()
                     .padding(.bottom, 20)
                     .padding(.trailing, showSidePanel ? sidePanelTotalWidth : 0)
@@ -124,13 +112,7 @@ struct ContentView: View {
                                 locationController.performFullSearch()
                             }
                     }
-                    .background(.regularMaterial)
-                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .stroke(Color(NSColor.separatorColor).opacity(0.5), lineWidth: 0.5)
-                    )
-                    .shadow(color: Color.black.opacity(0.08), radius: 4, x: 0, y: 1)
+                    .mapOverlayChrome()
                     .padding()
 
                     if (!locationController.searchResults.isEmpty || !locationController.fullSearchResults.isEmpty) && !locationController.searchQuery.isEmpty {
@@ -138,73 +120,29 @@ struct ContentView: View {
                             LazyVStack(alignment: .leading, spacing: 0) {
                                 if !locationController.fullSearchResults.isEmpty {
                                     ForEach(locationController.fullSearchResults, id: \.self) { item in
-                                        Button(action: {
+                                        SearchResultRow(
+                                            icon: "mappin.and.ellipse",
+                                            title: item.name ?? item.placemark.title ?? "Unknown",
+                                            subtitle: (item.placemark.title != item.name) ? item.placemark.title : nil
+                                        ) {
                                             locationController.selectMapItem(item)
-                                        }) {
-                                            HStack(spacing: 12) {
-                                                Image(systemName: "mappin.and.ellipse")
-                                                    .foregroundColor(.red)
-                                                    .frame(width: 20)
-
-                                                VStack(alignment: .leading) {
-                                                    Text(item.name ?? item.placemark.title ?? "Unknown")
-                                                        .font(.headline)
-                                                        .foregroundColor(.primary)
-                                                    if let title = item.placemark.title, title != item.name {
-                                                        Text(title)
-                                                            .font(.subheadline)
-                                                            .foregroundColor(.secondary)
-                                                    }
-                                                }
-                                            }
-                                            .padding(.vertical, 8)
-                                            .padding(.horizontal)
-                                            .frame(maxWidth: .infinity, alignment: .leading)
-                                            .contentShape(Rectangle())
                                         }
-                                        .buttonStyle(PlainButtonStyle())
-                                        Divider()
                                     }
                                 } else {
                                     ForEach(locationController.searchResults, id: \.self) { completion in
-                                        Button(action: {
+                                        SearchResultRow(
+                                            icon: completion.subtitle.contains(",") ? "building.2" : "mappin.and.ellipse",
+                                            title: completion.title,
+                                            subtitle: completion.subtitle.isEmpty ? nil : completion.subtitle
+                                        ) {
                                             locationController.selectSearchCompletion(completion)
-                                        }) {
-                                            HStack(spacing: 12) {
-                                                Image(systemName: completion.subtitle.contains(",") ? "building.2.fill" : "mappin.and.ellipse")
-                                                    .foregroundColor(.blue)
-                                                    .frame(width: 20)
-
-                                                VStack(alignment: .leading) {
-                                                    Text(completion.title)
-                                                        .font(.headline)
-                                                        .foregroundColor(.primary)
-                                                    if !completion.subtitle.isEmpty {
-                                                        Text(completion.subtitle)
-                                                            .font(.subheadline)
-                                                            .foregroundColor(.secondary)
-                                                    }
-                                                }
-                                            }
-                                            .padding(.vertical, 8)
-                                            .padding(.horizontal)
-                                            .frame(maxWidth: .infinity, alignment: .leading)
-                                            .contentShape(Rectangle())
                                         }
-                                        .buttonStyle(PlainButtonStyle())
-                                        Divider()
                                     }
                                 }
                             }
                         }
                         .frame(maxHeight: 300)
-                        .background(.regularMaterial)
-                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                .stroke(Color(NSColor.separatorColor).opacity(0.5), lineWidth: 0.5)
-                        )
-                        .shadow(color: Color.black.opacity(0.08), radius: 4, x: 0, y: 1)
+                        .mapOverlayChrome()
                         .padding(.horizontal)
                     }
                 }
@@ -216,21 +154,12 @@ struct ContentView: View {
                         .allowsHitTesting(false) // Allow clicks to pass through Spacer to map and buttons
                     
                     // Toggle button (handle)
-                    ZStack {
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .fill(.regularMaterial)
-                            .frame(width: 24, height: 60)
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                    .stroke(Color(NSColor.separatorColor).opacity(0.5), lineWidth: 0.5)
-                            )
-                            .shadow(color: Color.black.opacity(0.08), radius: 4, x: -1, y: 1)
-
-                        Image(systemName: showSidePanel ? "chevron.right" : "chevron.left")
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundColor(.secondary)
-                    }
-                    .contentShape(Rectangle())
+                    Image(systemName: showSidePanel ? "chevron.right" : "chevron.left")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundColor(.secondary)
+                        .frame(width: 24, height: 60)
+                        .mapOverlayChrome()
+                        .contentShape(Rectangle())
                     .onTapGesture {
                         withAnimation(.spring()) {
                             showSidePanel.toggle()
@@ -264,13 +193,7 @@ struct ContentView: View {
                                 .frame(width: 300)
                                 .padding(20)
                             }
-                            .background(.regularMaterial)
-                            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                    .stroke(Color(NSColor.separatorColor).opacity(0.5), lineWidth: 0.5)
-                            )
-                            .shadow(color: Color.black.opacity(0.12), radius: 12, x: -3, y: 3)
+                            .mapOverlayChrome(radius: PanelTheme.radiusPanel, elevated: true)
                             .padding(.vertical, 40)
                             .padding(.trailing, 20)
                         }
@@ -326,7 +249,8 @@ struct ContentView: View {
                 }
                 return event
             }
-        }        .onDisappear {
+        }
+        .onDisappear {
             if let monitor = eventMonitor {
                 NSEvent.removeMonitor(monitor)
             }
@@ -420,7 +344,7 @@ private struct MapControlButton: View {
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundColor(.primary)
                 .frame(width: 28, height: 28)
-                .background(isHovered ? Color.primary.opacity(0.08) : Color.clear)
+                .background(isHovered ? PanelTheme.buttonFill : Color.clear)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -428,67 +352,44 @@ private struct MapControlButton: View {
     }
 }
 
-// Helper extension for custom corner radius
-extension View {
-    func cornerRadius(_ radius: CGFloat, corners: RectCorner) -> some View {
-        clipShape(RoundedCorner(radius: radius, corners: corners))
+// MARK: - Search result row
+
+private struct SearchResultRow: View {
+    let icon: String
+    let title: String
+    var subtitle: String? = nil
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 10) {
+                Image(systemName: icon)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundColor(.secondary)
+                    .frame(width: 20)
+
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(title)
+                        .font(.callout)
+                        .fontWeight(.medium)
+                        .foregroundColor(PanelTheme.textPrimary)
+                        .lineLimit(1)
+                    if let subtitle = subtitle {
+                        Text(subtitle)
+                            .font(.caption)
+                            .foregroundColor(PanelTheme.textSecondary)
+                            .lineLimit(1)
+                    }
+                }
+            }
+            .padding(.vertical, 7)
+            .padding(.horizontal, 12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        Divider().padding(.leading, 42)
     }
-}
-
-struct RoundedCorner: Shape {
-    var radius: CGFloat = .infinity
-    var corners: RectCorner = .allCorners
-
-    func path(in rect: CGRect) -> Path {
-        var path = Path()
-
-        let p1 = CGPoint(x: rect.minX, y: rect.minY)
-        let p2 = CGPoint(x: rect.maxX, y: rect.minY)
-        let p3 = CGPoint(x: rect.maxX, y: rect.maxY)
-        let p4 = CGPoint(x: rect.minX, y: rect.maxY)
-
-        path.move(to: CGPoint(x: rect.minX + radius, y: rect.minY))
-
-        if corners.contains(.topRight) {
-            path.addLine(to: CGPoint(x: rect.maxX - radius, y: rect.minY))
-            path.addArc(center: CGPoint(x: rect.maxX - radius, y: rect.minY + radius), radius: radius, startAngle: Angle(degrees: -90), endAngle: Angle(degrees: 0), clockwise: false)
-        } else {
-            path.addLine(to: p2)
-        }
-
-        if corners.contains(.bottomRight) {
-            path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY - radius))
-            path.addArc(center: CGPoint(x: rect.maxX - radius, y: rect.maxY - radius), radius: radius, startAngle: Angle(degrees: 0), endAngle: Angle(degrees: 90), clockwise: false)
-        } else {
-            path.addLine(to: p3)
-        }
-
-        if corners.contains(.bottomLeft) {
-            path.addLine(to: CGPoint(x: rect.minX + radius, y: rect.maxY))
-            path.addArc(center: CGPoint(x: rect.minX + radius, y: rect.maxY - radius), radius: radius, startAngle: Angle(degrees: 90), endAngle: Angle(degrees: 180), clockwise: false)
-        } else {
-            path.addLine(to: p4)
-        }
-
-        if corners.contains(.topLeft) {
-            path.addLine(to: CGPoint(x: rect.minX, y: rect.minY + radius))
-            path.addArc(center: CGPoint(x: rect.minX + radius, y: rect.minY + radius), radius: radius, startAngle: Angle(degrees: 180), endAngle: Angle(degrees: 270), clockwise: false)
-        } else {
-            path.addLine(to: p1)
-        }
-
-        path.closeSubpath()
-        return path
-    }
-}
-
-struct RectCorner: OptionSet {
-    let rawValue: Int
-    static let topLeft = RectCorner(rawValue: 1 << 0)
-    static let topRight = RectCorner(rawValue: 1 << 1)
-    static let bottomLeft = RectCorner(rawValue: 1 << 2)
-    static let bottomRight = RectCorner(rawValue: 1 << 3)
-    static let allCorners: RectCorner = [.topLeft, .topRight, .bottomLeft, .bottomRight]
 }
 
 struct ContentView_Previews: PreviewProvider {
@@ -504,17 +405,9 @@ struct Alert: ViewModifier {
     let text: String
 
     func body(content: Content) -> some View {
-        if #available(macOS 12.0, *) {
-            content
-                .alert(text, isPresented: isPresented) {
-                    Text("OK")
-                }
-        } else {
-            content.alert(isPresented: isPresented) {
-                SwiftUI.Alert(
-                    title: Text(text)
-                )
+        content
+            .alert(text, isPresented: isPresented) {
+                Button("OK", role: .cancel) {}
             }
-        }
     }
 }

@@ -22,11 +22,48 @@ enum PanelTheme {
     // Shape
     static let radius: CGFloat = 6
     static let radiusContainer: CGFloat = 10
+    static let radiusPanel: CGFloat = 16
 
     // Typography colors
     static let textPrimary   = Color.primary
     static let textSecondary = Color.secondary
     static let textTertiary  = Color(NSColor.tertiaryLabelColor)
+}
+
+// MARK: - Floating map chrome
+
+/// Unified chrome for everything that floats above the map: search bar,
+/// results dropdown, zoom cluster, debug log, sidebar handle, side panel.
+/// One material, one hairline, one shadow scale — no per-call-site values.
+struct MapOverlayChrome: ViewModifier {
+    var radius: CGFloat = PanelTheme.radiusContainer
+    /// Stronger shadow for the large side panel; small overlays stay light.
+    var elevated: Bool = false
+
+    func body(content: Content) -> some View {
+        content
+            .background(.regularMaterial)
+            .clipShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: radius, style: .continuous)
+                    .stroke(PanelTheme.separatorStrong, lineWidth: 0.5)
+            )
+            .shadow(
+                color: Color.black.opacity(elevated ? 0.12 : 0.08),
+                radius: elevated ? 12 : 4,
+                x: 0,
+                y: elevated ? 3 : 1
+            )
+    }
+}
+
+extension View {
+    func mapOverlayChrome(
+        radius: CGFloat = PanelTheme.radiusContainer,
+        elevated: Bool = false
+    ) -> some View {
+        modifier(MapOverlayChrome(radius: radius, elevated: elevated))
+    }
 }
 
 // MARK: - Section labels & dividers

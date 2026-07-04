@@ -27,7 +27,6 @@ struct ManageLabelsView: View {
             footer
         }
         .frame(width: 340, height: 420)
-        .background(PanelTheme.containerFill)
         .alert("Rename label", isPresented: Binding(
             get: { renameTarget != nil },
             set: { if !$0 { renameTarget = nil } }

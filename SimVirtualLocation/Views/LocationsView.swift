@@ -247,7 +247,9 @@ private struct FilterChip: View {
             Text(label)
                 .font(.caption)
                 .fontWeight(isSelected ? .semibold : .regular)
-                .foregroundColor(isSelected ? .white : PanelTheme.textPrimary)
+                .foregroundColor(isSelected
+                    ? Color(NSColor.alternateSelectedControlTextColor)
+                    : PanelTheme.textPrimary)
                 .lineLimit(1)
                 .padding(.horizontal, 10)
                 .padding(.vertical, 4)
@@ -410,6 +412,5 @@ private struct LabelPickerPopover: View {
             }
             .buttonStyle(.plain)
         }
-        .background(PanelTheme.containerFill)
     }
 }
