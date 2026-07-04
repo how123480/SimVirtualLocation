@@ -899,6 +899,26 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
         mapView.mkMapView.setVisibleMapRect(rect, edgePadding: insets, animated: true)
     }
 
+    /// Non-animated recenter for high-frequency callers (the 60 fps joystick
+    /// tick). Keeps the current zoom and shifts the map center east by half
+    /// the side-panel inset so `coord` lands in the middle of the visible
+    /// (un-covered) area. `setVisibleMapRect` is unsuitable here: it animates
+    /// and re-fits the zoom on every call.
+    private func setCenterVisibleInstant(_ coord: CLLocationCoordinate2D) {
+        let mkMapView = mapView.mkMapView
+        let viewWidth = mkMapView.bounds.width
+        guard mapVisibleInsetRight > 0, viewWidth > 0 else {
+            mkMapView.setCenter(coord, animated: false)
+            return
+        }
+        let degreesPerPoint = mkMapView.region.span.longitudeDelta / Double(viewWidth)
+        let shifted = CLLocationCoordinate2D(
+            latitude: coord.latitude,
+            longitude: coord.longitude + degreesPerPoint * Double(mapVisibleInsetRight) / 2
+        )
+        mkMapView.setCenter(shifted, animated: false)
+    }
+
     /// Converts an `MKCoordinateRegion` (center + span) into the equivalent
     /// `MKMapRect`, used as the input for `setVisibleMapRect(_:edgePadding:_:)`.
     private func mapRect(for region: MKCoordinateRegion) -> MKMapRect {
@@ -1619,7 +1639,7 @@ extension LocationController {
             longitude: coord.longitude + dx * span.longitudeDelta
         )
         currentSimulationAnnotation.coordinate = newCoord
-        mapView.mkMapView.setCenter(newCoord, animated: false)
+        setCenterVisibleInstant(newCoord)
 
         // If simulating, update device location in real-time after throttle
         if simulationStatus.isMockingActive && isDeviceReady,
