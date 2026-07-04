@@ -7,6 +7,9 @@
 
 import SwiftUI
 import MapKit
+#if canImport(Translation)
+import Translation
+#endif
 
 struct ContentView: View {
 
@@ -328,11 +331,81 @@ struct ContentView: View {
                 NSEvent.removeMonitor(monitor)
             }
         }
+        .searchTranslationSupport(locationController)
     }
 
     init(mapView: MapView, locationController: LocationController) {
         self.mapView = mapView
         self.locationController = locationController
+    }
+}
+
+// MARK: - Search query translation (macOS 15+)
+
+#if canImport(Translation)
+/// Resolves LocationController's search-translation requests. A
+/// `TranslationSession` can only be obtained through SwiftUI's
+/// `translationTask` modifier, so the controller publishes a request and
+/// this modifier answers it via `completeSearchTranslation(_:)`.
+@available(macOS 15.0, *)
+private struct SearchTranslationSupport: ViewModifier {
+    @ObservedObject var locationController: LocationController
+    @State private var configuration: TranslationSession.Configuration?
+
+    func body(content: Content) -> some View {
+        content
+            .onChange(of: locationController.searchTranslationRequest) { _, request in
+                guard request != nil else { return }
+                if configuration == nil {
+                    configuration = TranslationSession.Configuration(
+                        target: Locale.Language(identifier: "en")
+                    )
+                } else {
+                    // Re-fires the translationTask action for a new request.
+                    configuration?.invalidate()
+                }
+            }
+            .translationTask(configuration) { session in
+                guard let request = locationController.searchTranslationRequest else { return }
+                let source = Locale.Language(identifier: request.sourceLanguageIdentifier)
+                let status = await LanguageAvailability().status(
+                    from: source,
+                    to: Locale.Language(identifier: "en")
+                )
+                switch status {
+                case .installed:
+                    break
+                case .supported:
+                    // Translating now would show the system model-download
+                    // prompt — acceptable only for an explicit Enter-key
+                    // search, not the silent as-you-type fallback.
+                    guard request.interactive else {
+                        locationController.completeSearchTranslation(nil)
+                        return
+                    }
+                default:
+                    locationController.completeSearchTranslation(nil)
+                    return
+                }
+                let translated = (try? await session.translate(request.query))?.targetText
+                locationController.completeSearchTranslation(translated)
+            }
+    }
+}
+#endif
+
+private extension View {
+    @ViewBuilder
+    func searchTranslationSupport(_ locationController: LocationController) -> some View {
+        #if canImport(Translation)
+        if #available(macOS 15.0, *) {
+            modifier(SearchTranslationSupport(locationController: locationController))
+        } else {
+            self
+        }
+        #else
+        self
+        #endif
     }
 }
 

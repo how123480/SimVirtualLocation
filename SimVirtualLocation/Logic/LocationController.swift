@@ -15,6 +15,7 @@ import Combine
 import CoreLocation
 import MapKit
 import MachO
+import NaturalLanguage
 
 @MainActor
 class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocationManagerDelegate, MKLocalSearchCompleterDelegate, ErrorHandlerHost {
@@ -112,10 +113,23 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
         didSet {
             fullSearchResults = []
             completer.queryFragment = searchQuery
+            scheduleSearchFallback()
         }
     }
     @Published var searchResults: [MKLocalSearchCompletion] = []
     @Published var fullSearchResults: [MKMapItem] = []
+
+    /// A search query awaiting translation. The Translation framework only
+    /// hands out sessions through SwiftUI's `translationTask` modifier, so
+    /// ContentView observes this (macOS 15+) and resolves it via
+    /// `completeSearchTranslation(_:)`.
+    struct SearchTranslationRequest: Equatable {
+        let id: UUID
+        let query: String
+        let sourceLanguageIdentifier: String
+        let interactive: Bool
+    }
+    @Published var searchTranslationRequest: SearchTranslationRequest?
 
     let dateFormatter: DateFormatter = {
         let f = DateFormatter()
@@ -183,6 +197,13 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
     private var timer: Timer?
     private var lastRunnerUpdateTime: Date = .distantPast
     private var currentRunTask: Task<Void, Never>?
+
+    /// Fires a full MKLocalSearch when the completer has produced nothing for
+    /// the current query (e.g. translated POI names like 西雅圖水族館, which
+    /// the autocomplete index cannot match but the full search resolves).
+    private var searchFallbackTimer: Timer?
+    private var fullSearchTask: Task<Void, Never>?
+    private var searchTranslationContinuation: CheckedContinuation<String?, Never>?
 
     // Joystick properties
     private var joystickDebounceTimer: Timer?
@@ -516,21 +537,109 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
         }
     }
 
-    func performFullSearch() {
+    /// Three-stage search pipeline. Each stage only runs when the previous
+    /// one produced nothing:
+    ///   1. Biased to the visible map region (keeps nearby POIs first).
+    ///   2. Worldwide — MapKit's region bias FILTERS OUT faraway exact
+    ///      matches entirely, it does not just rank them lower.
+    ///   3. English translation of the query (macOS 15+) — Apple's POI index
+    ///      often has no alias in the query's language (e.g. 任天堂博物館).
+    func performFullSearch(interactive: Bool = true) {
         guard !searchQuery.isEmpty else { return }
-        let request = MKLocalSearch.Request()
-        request.naturalLanguageQuery = searchQuery
-        request.region = mapView.mkMapView.region
-
-        MKLocalSearch(request: request).start { [weak self] response, error in
+        let query = searchQuery
+        fullSearchTask?.cancel()
+        fullSearchTask = Task { @MainActor [weak self] in
             guard let self else { return }
-            Task { @MainActor in
-                if let error {
-                    self.showAlert("Search failed: \(error.localizedDescription)")
-                    return
+            var items = await self.runLocalSearch(query, region: self.mapView.mkMapView.region)
+            if items.isEmpty, !Task.isCancelled, self.searchQuery == query {
+                items = await self.runLocalSearch(query, region: MKCoordinateRegion(.world))
+            }
+            if items.isEmpty, !Task.isCancelled, self.searchQuery == query,
+               let translated = await self.translateSearchQuery(query, interactive: interactive),
+               translated.caseInsensitiveCompare(query) != .orderedSame {
+                self.logger.info("Search fallback: retrying with translated query \"\(translated)\"")
+                items = await self.runLocalSearch(translated, region: MKCoordinateRegion(.world))
+            }
+            // The user kept typing while the search was in flight — the
+            // results no longer match what's in the field.
+            guard !Task.isCancelled, self.searchQuery == query else { return }
+            if items.isEmpty {
+                if interactive {
+                    self.showAlert("No results found for \"\(query)\"")
+                } else {
+                    self.logger.debug("Fallback search found nothing for the current query")
                 }
-                self.searchResults = []
-                self.fullSearchResults = response?.mapItems ?? []
+                return
+            }
+            self.searchResults = []
+            self.fullSearchResults = items
+        }
+    }
+
+    private func runLocalSearch(_ query: String, region: MKCoordinateRegion?) async -> [MKMapItem] {
+        let request = MKLocalSearch.Request()
+        request.naturalLanguageQuery = query
+        if let region { request.region = region }
+        // MKLocalSearch reports "no results" as an error (MKErrorDomain 4);
+        // the pipeline treats any failure as an empty stage.
+        let response = try? await MKLocalSearch(request: request).start()
+        return response?.mapItems ?? []
+    }
+
+    /// Bridges to ContentView's `translationTask` modifier. Returns nil when
+    /// translation is unavailable (macOS < 15), unnecessary (query already
+    /// Latin-script / English), already in flight, or fails.
+    private func translateSearchQuery(_ query: String, interactive: Bool) async -> String? {
+        guard #available(macOS 15.0, *) else { return nil }
+        guard query.contains(where: { !$0.isASCII }) else { return nil }
+        let recognizer = NLLanguageRecognizer()
+        recognizer.processString(query)
+        guard let language = recognizer.dominantLanguage, language != .english else { return nil }
+        guard searchTranslationContinuation == nil else { return nil }
+
+        let request = SearchTranslationRequest(
+            id: UUID(),
+            query: query,
+            sourceLanguageIdentifier: language.rawValue,
+            interactive: interactive
+        )
+        // Watchdog: if the modifier never resolves the request (window torn
+        // down, download prompt left open), fail this translation instead of
+        // blocking every future search behind the single-flight guard.
+        let requestID = request.id
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 15_000_000_000)
+            guard let self, self.searchTranslationRequest?.id == requestID else { return }
+            self.logger.warn("Search translation timed out; continuing without it")
+            self.completeSearchTranslation(nil)
+        }
+        return await withCheckedContinuation { continuation in
+            searchTranslationContinuation = continuation
+            searchTranslationRequest = request
+        }
+    }
+
+    func completeSearchTranslation(_ translated: String?) {
+        searchTranslationRequest = nil
+        searchTranslationContinuation?.resume(returning: translated)
+        searchTranslationContinuation = nil
+    }
+
+    /// The completer covers most queries, but its index misses translated POI
+    /// names entirely. Once typing settles, if autocomplete produced nothing,
+    /// silently run the full search so the dropdown is never falsely empty.
+    private func scheduleSearchFallback() {
+        searchFallbackTimer?.invalidate()
+        searchFallbackTimer = nil
+        guard !searchQuery.isEmpty else { return }
+        let query = searchQuery
+        searchFallbackTimer = Timer.scheduledTimer(withTimeInterval: 0.8, repeats: false) { [weak self] _ in
+            Task { @MainActor in
+                guard let self,
+                      self.searchQuery == query,
+                      self.searchResults.isEmpty,
+                      self.fullSearchResults.isEmpty else { return }
+                self.performFullSearch(interactive: false)
             }
         }
     }
