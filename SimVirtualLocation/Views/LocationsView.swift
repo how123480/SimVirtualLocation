@@ -27,18 +27,13 @@ struct LocationsView: View {
     }
 
     var body: some View {
-        PanelContainer {
-            VStack(alignment: .leading, spacing: 0) {
-                header
-                Divider()
-                filterChipsRow
-                if showAddForm {
-                    Divider()
-                    addForm
-                }
-                Divider()
-                locationList
+        VStack(alignment: .leading, spacing: 8) {
+            header
+            filterChipsRow
+            if showAddForm {
+                addForm
             }
+            locationList
         }
         .alert("Rename \(selectedLocation.name)", isPresented: $renameAlertShowing) {
             TextField("New name", text: $updatedName)
@@ -72,10 +67,7 @@ struct LocationsView: View {
 
     private var header: some View {
         HStack(spacing: 6) {
-            Text("Saved Locations")
-                .font(.callout)
-                .fontWeight(.medium)
-                .foregroundColor(PanelTheme.textPrimary)
+            PanelSectionLabel(text: "Saved Locations")
 
             if !locationController.savedLocations.isEmpty {
                 Text("\(locationController.savedLocations.count)")
@@ -104,8 +96,6 @@ struct LocationsView: View {
                 if showAddForm { newName = ""; newLatLng = "" }
             }
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
     }
 
     private var filterChipsRow: some View {
@@ -141,8 +131,7 @@ struct LocationsView: View {
                 .buttonStyle(.plain)
                 .help("Manage labels")
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
+            .padding(.vertical, 2)
         }
         .onChange(of: locationController.locationLabels) { labels in
             if let id = selectedLabelID, !labels.contains(where: { $0.id == id }) {
@@ -152,26 +141,27 @@ struct LocationsView: View {
     }
 
     private var addForm: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            TextField("Name (optional)", text: $newName)
-                .textFieldStyle(.roundedBorder)
-                .font(.callout)
-            TextField("Latitude, Longitude", text: $newLatLng)
-                .textFieldStyle(.roundedBorder)
-                .font(.callout)
-            PanelButton(
-                title: "Add",
-                style: .prominent,
-                disabled: newLatLng.trimmingCharacters(in: .whitespaces).isEmpty
-            ) {
-                locationController.addSavedLocation(name: newName, latLng: newLatLng)
-                newName = ""
-                newLatLng = ""
-                withAnimation { showAddForm = false }
+        PanelContainer {
+            VStack(alignment: .leading, spacing: 8) {
+                TextField("Name (optional)", text: $newName)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.callout)
+                TextField("Latitude, Longitude", text: $newLatLng)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.callout)
+                PanelButton(
+                    title: "Add",
+                    style: .prominent,
+                    disabled: newLatLng.trimmingCharacters(in: .whitespaces).isEmpty
+                ) {
+                    locationController.addSavedLocation(name: newName, latLng: newLatLng)
+                    newName = ""
+                    newLatLng = ""
+                    withAnimation { showAddForm = false }
+                }
             }
+            .padding(10)
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 10)
     }
 
     @ViewBuilder
@@ -210,7 +200,7 @@ struct LocationsView: View {
                         )
                     }
                 }
-                .padding(8)
+                .padding(.vertical, 4)
             }
             .frame(minHeight: 60, maxHeight: .infinity)
         }

@@ -42,9 +42,9 @@ SwiftUI macOS app (12+) for spoofing iOS GPS (Simulator + physical devices). Ext
 - **`AppError` / `ErrorHandler`** (`Logic/AppError.swift`, `Logic/ErrorHandler.swift`) — every fallible operation surfaces a typed `AppError`; `ErrorHandler` decides log/alert/state-reset. `AppError.from(stderr:context:)` classifies pymobiledevice3 stderr; `isTunnelDrop == true` (no-route-to-host, connection refused/reset, tunneld unreachable, command timeout, …) routes into silent tunnel recovery instead of alerting. **`presentAlert` is presentation-only — it must never mutate `simulationStatus`** (alerts fire for benign reasons during a running simulation; any status reset happens explicitly at the call site or via `requiresStateReset` → `resetAllState`).
 - **`AppLogger`** (`Logic/Logger.swift`) — singleton; all logging goes through `.debug/info/warn/error`. **Never use `print()`**. Every message is sanitized at write time (home dir, UDIDs, UUIDs, IPv6 link-local) before hitting `~/Library/Logs/SimVirtualLocation/app.log` (1 MB × 5 rotations) and the in-app log panel — so interpolating a UDID or path into a log message is safe.
 - **`MapView`** (`Views/MapView.swift`) — `NSViewRepresentable` wrapper for `MKMapView`.
-- **`ContentView`** (`Views/ContentView.swift`) — root view; owns all global key event monitors (`Esc`, `d`, arrow keys). Uses `@FocusState` to avoid intercepting TextField input. Defines the single source of truth `sidePanelTotalWidth: CGFloat = 360` used for both the map zoom-button trailing offset and for syncing `LocationController.mapVisibleInsetRight`.
+- **`ContentView`** (`Views/ContentView.swift`) — root view; owns all global key event monitors (`Esc`, `d`, arrow keys). Uses `@FocusState` to avoid intercepting TextField input. Layout is a flat `ZStack` of full-size layers: map (`.ignoresSafeArea()`, bleeds under the hidden title bar), debug log (bottom-leading), zoom cluster (bottom-trailing), search column (top-leading — stays inside the safe area so it clears the traffic lights), and the side panel: a **full-height inspector** flush with the trailing window edge, with the chevron collapse handle (24×60 tab) vertically centered on its leading edge (`.thickMaterial`, leading hairline, no shadow/no radius). Defines the single source of truth `sidePanelTotalWidth: CGFloat = 340` (300 content + 2×20 padding) used for the floating-control trailing offsets and for syncing `LocationController.mapVisibleInsetRight`.
 - **`Views/DesignSystem.swift`** — the entire visual language lives here. **All buttons, dividers, section labels, status indicators, and container backgrounds must come from this file.** Do not reach for `.bordered`, `.borderedProminent`, raw `Color.gray`, or one-off `RoundedRectangle` chrome in feature code.
-- **`AppDelegate`** (`Views/Main.swift`) — sets `NSApp.setActivationPolicy(.regular)` in `applicationWillFinishLaunching`. Required because SPM-built executables otherwise launch as `.accessory` and their windows can never become key, so keyboard events get silently dropped.
+- **`AppDelegate`** (`Views/Main.swift`) — sets `NSApp.setActivationPolicy(.regular)` in `applicationWillFinishLaunching`. Required because SPM-built executables otherwise launch as `.accessory` and their windows can never become key, so keyboard events get silently dropped. The `WindowGroup` uses `.windowStyle(.hiddenTitleBar)` — the map bleeds under the title-bar strip (traffic lights float over it, Maps-style); the hidden strip remains the window-drag region, and SwiftUI's top safe area keeps overlays clear of the traffic lights.
 
 ### iOS device connection stack (RSD, iOS 17+)
 
@@ -100,9 +100,9 @@ The control panel follows a strict macOS-native visual language. Reuse the exist
 - `PanelIconButton` — small icon-only button (refresh, +, trash, etc.). Built-in hover bg.
 - `PanelDivider` — full-bleed hairline (negative horizontal padding compensates for the sidebar's 20 px inner padding).
 - `PanelSectionLabel` — uppercase, caption2, semibold, tracking 0.5, tertiary foreground.
-- `PanelContainer<Content>` — rounded subtle-fill container with hairline border (Saved Locations group).
-- `LiveStatusPill` — capsule with a colored dot. `pulses: Bool` for active states (default true), `isLoading: Bool` replaces the dot with a spinner.
-- `StatusSection` — array of `LiveStatusPill`s laid out horizontally; used by `StatusPanel` in `iOSPanel.swift` to render device + simulation status at the top of the control panel.
+- `PanelContainer<Content>` — rounded subtle-fill container with hairline border (used for transient forms like the add-location form).
+- `LiveStatusPill` — capsule with a colored dot. `pulses: Bool` for active states (default true), `isLoading: Bool` replaces the dot with a spinner. Used for the simulation state on the SIMULATION section header.
+- `MapOverlayChrome` (`.mapOverlayChrome()`) — unified chrome for everything floating over the map (search bar, results, zoom cluster, panel toggle, debug log).
 
 **Spacing rhythm:** every top-level section in the control panel uses `.padding(.vertical, 14)`, with `PanelDivider` between sections. Do not introduce one-off paddings; keep the rhythm consistent.
 
@@ -115,7 +115,7 @@ The control panel follows a strict macOS-native visual language. Reuse the exist
   - `centerVisibleOn(_:)` — for a single coordinate (Point A placement, Apply to A, search-result pick, locate-me).
   - `showVisibleMapRect(_:edgeMargin:)` — for arbitrary rects (Simulate Route bounds, A→B Linear bounds).
   Both consult `@Published var mapVisibleInsetRight: CGFloat`, which `ContentView` syncs from `showSidePanel`. **Do not call `mapView.setRegion(_:animated:)` directly** for user-initiated camera moves.
-- **Status zone at top of control panel.** Device state + simulation state are surfaced as two horizontal `LiveStatusPill`s in `StatusPanel` (iOSPanel.swift). Green = active/ok, orange + spinner = in-progress, red = error, gray + `pulses: false` = idle. Animate pill changes with `.easeInOut(duration: 0.25)`.
+- **Status is contextual, not a zone.** Device state lives on the **device card** (`iOSDeviceSettings.swift`): status dot + "iOS x.y · Connected" subtitle (mini spinner while transitioning, red text + `.help` tooltip for errors). Clicking the card opens a popover picker (device/simulator list + Refresh List row); the card is disabled while `deviceStatus.isActive`, like the old picker. Simulation state is a single `LiveStatusPill` on the SIMULATION section header (`LocationSettingsPanel.swift`). Green = active/ok, orange + spinner = in-progress, red = error, gray + `pulses: false` = idle. Animate status changes with `.easeInOut(duration: 0.25)`.
 
 ## Model invariants
 

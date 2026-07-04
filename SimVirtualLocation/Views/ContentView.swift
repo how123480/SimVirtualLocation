@@ -21,145 +21,41 @@ struct ContentView: View {
     @FocusState private var isSearchFocused: Bool
 
     /// Horizontal space the open side panel occupies (inner width + horizontal
-    /// padding around the panel + trailing window inset). Kept in one place so
-    /// the map centering math and the zoom-buttons offset stay in sync.
-    private let sidePanelTotalWidth: CGFloat = 360
+    /// padding; the panel sits flush against the trailing window edge). Kept in
+    /// one place so the map centering math and the floating-control offsets
+    /// stay in sync.
+    private let sidePanelTotalWidth: CGFloat = 340
 
     var body: some View {
-        VStack {
-            ZStack(alignment: .topLeading) {
-                // Map background layer
-                ZStack(alignment: .bottomTrailing) {
-                    ZStack(alignment: .bottomLeading) {
-                        mapView.frame(minWidth: 400)
-                        
-                        if isDebugMode {
-                            ScrollViewReader { proxy in
-                                ScrollView {
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        ForEach(locationController.logs.reversed()) { log in
-                                            // Unified format: [time] [level] [file:line] message
-                                            Text("[\(locationController.dateFormatter.string(from: log.date))] [\(log.level.label)] [\(log.location)] \(log.message)")
-                                                .font(.system(size: 11, design: .monospaced))
-                                                .foregroundColor(.primary)
-                                                .id(log.id)
-                                        }
-                                    }
-                                    .padding(8)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                }
-                                .frame(width: 400)
-                                .frame(maxHeight: 250)
-                                .mapOverlayChrome()
-                                .padding()
-                                .onChange(of: locationController.logs.count) { _ in
-                                    if let lastId = locationController.logs.first?.id {
-                                        withAnimation {
-                                            proxy.scrollTo(lastId, anchor: .bottom)
-                                        }
-                                    }
-                                }
-                                .onAppear {
-                                    if let lastId = locationController.logs.first?.id {
-                                        proxy.scrollTo(lastId, anchor: .bottom)
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    
-                    // Map zoom buttons
-                    VStack(spacing: 0) {
-                        MapControlButton(icon: "plus") {
-                            var region: MKCoordinateRegion = mapView.mkMapView.region
-                            region.span.latitudeDelta /= 2.0
-                            region.span.longitudeDelta /= 2.0
-                            mapView.mkMapView.setRegion(region, animated: true)
-                        }
-                        Divider().frame(width: 28)
-                        MapControlButton(icon: "minus") {
-                            var region: MKCoordinateRegion = mapView.mkMapView.region
-                            region.span.latitudeDelta *= 2.0
-                            region.span.longitudeDelta *= 2.0
-                            mapView.mkMapView.setRegion(region, animated: true)
-                        }
-                        Divider().frame(width: 28)
-                        MapControlButton(icon: "location") {
-                            locationController.updateMapRegion(force: true)
-                        }
-                    }
+        ZStack(alignment: .topLeading) {
+            // Map — bleeds under the hidden title bar.
+            mapView
+                .ignoresSafeArea()
+
+            if isDebugMode {
+                debugLogOverlay
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+            }
+
+            zoomCluster
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+
+            // Search — top leading; the safe area keeps it below the
+            // traffic-light strip.
+            searchColumn
+
+            // Side panel (full-height inspector) + collapse handle on its edge.
+            HStack(spacing: 0) {
+                Spacer()
+                    .allowsHitTesting(false) // Allow clicks to pass through Spacer to map and buttons
+
+                // Toggle button (handle)
+                Image(systemName: showSidePanel ? "chevron.right" : "chevron.left")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(.secondary)
+                    .frame(width: 24, height: 60)
                     .mapOverlayChrome()
-                    .padding()
-                    .padding(.bottom, 20)
-                    .padding(.trailing, showSidePanel ? sidePanelTotalWidth : 0)
-                    .animation(.spring(), value: showSidePanel)
-                }
-
-                // Search bar (top left)
-                VStack(alignment: .leading, spacing: 0) {
-                    HStack(spacing: 6) {
-                        Image(systemName: "magnifyingglass")
-                            .foregroundColor(.secondary)
-                            .font(.callout)
-                            .padding(.leading, 10)
-                        TextField("Search location", text: $locationController.searchQuery)
-                            .focused($isSearchFocused)
-                            .textFieldStyle(PlainTextFieldStyle())
-                            .font(.callout)
-                            .padding(.vertical, 7)
-                            .padding(.trailing, 10)
-                            .onSubmit {
-                                locationController.performFullSearch()
-                            }
-                    }
-                    .mapOverlayChrome()
-                    .padding()
-
-                    if (!locationController.searchResults.isEmpty || !locationController.fullSearchResults.isEmpty) && !locationController.searchQuery.isEmpty {
-                        ScrollView {
-                            LazyVStack(alignment: .leading, spacing: 0) {
-                                if !locationController.fullSearchResults.isEmpty {
-                                    ForEach(locationController.fullSearchResults, id: \.self) { item in
-                                        SearchResultRow(
-                                            icon: "mappin.and.ellipse",
-                                            title: item.name ?? item.placemark.title ?? "Unknown",
-                                            subtitle: (item.placemark.title != item.name) ? item.placemark.title : nil
-                                        ) {
-                                            locationController.selectMapItem(item)
-                                        }
-                                    }
-                                } else {
-                                    ForEach(locationController.searchResults, id: \.self) { completion in
-                                        SearchResultRow(
-                                            icon: completion.subtitle.contains(",") ? "building.2" : "mappin.and.ellipse",
-                                            title: completion.title,
-                                            subtitle: completion.subtitle.isEmpty ? nil : completion.subtitle
-                                        ) {
-                                            locationController.selectSearchCompletion(completion)
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        .frame(maxHeight: 300)
-                        .mapOverlayChrome()
-                        .padding(.horizontal)
-                    }
-                }
-                .frame(width: 300)
-
-                // Right sidebar toggle and panel
-                HStack(spacing: 0) {
-                    Spacer()
-                        .allowsHitTesting(false) // Allow clicks to pass through Spacer to map and buttons
-                    
-                    // Toggle button (handle)
-                    Image(systemName: showSidePanel ? "chevron.right" : "chevron.left")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundColor(.secondary)
-                        .frame(width: 24, height: 60)
-                        .mapOverlayChrome()
-                        .contentShape(Rectangle())
+                    .contentShape(Rectangle())
                     .onTapGesture {
                         withAnimation(.spring()) {
                             showSidePanel.toggle()
@@ -168,51 +64,25 @@ struct ContentView: View {
                     .padding(.trailing, showSidePanel ? -12 : 10)
                     .zIndex(1)
 
-                    if showSidePanel {
-                        HStack(alignment: .top, spacing: 0) {
-                            HStack(alignment: .top, spacing: 0) {
-                                // Control Panel
-                                VStack(spacing: 0) {
-                                    iOSPanel()
-                                        .environmentObject(locationController)
-                                        .frame(maxHeight: .infinity)
-
-                                    PanelDivider()
-
-                                    PanelButton(title: "Copy Logs", icon: "doc.on.doc", style: .subtle) {
-                                        let log = locationController.logs.map { entry in
-                                            let date = locationController.dateFormatter.string(from: entry.date)
-                                            return "[\(date)] [\(entry.level.label)] [\(entry.location)] \(entry.message)"
-                                        }.joined(separator: "\n")
-                                        let pasteboard = NSPasteboard.general
-                                        pasteboard.declareTypes([.string], owner: nil)
-                                        pasteboard.setString(log, forType: .string)
-                                    }
-                                    .padding(.vertical, 14)
-                                }
-                                .frame(width: 300)
-                                .padding(20)
-                            }
-                            .mapOverlayChrome(radius: PanelTheme.radiusPanel, elevated: true)
-                            .padding(.vertical, 40)
-                            .padding(.trailing, 20)
-                        }
-                        .transition(.move(edge: .trailing).combined(with: .opacity))
-                    }
+                if showSidePanel {
+                    sidePanel
+                        .transition(.move(edge: .trailing))
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            .frame(minWidth: 800, minHeight: 500)
-            .animation(.spring(), value: showSidePanel)
-            .onAppear {
-                locationController.mapVisibleInsetRight = showSidePanel ? sidePanelTotalWidth : 0
-            }
-            .onChange(of: showSidePanel) { newValue in
-                locationController.mapVisibleInsetRight = newValue ? sidePanelTotalWidth : 0
-            }
-            .modifier(Alert(isPresented: $locationController.showingAlert, text: locationController.alertText))
+            // Full-size so the handle stays vertically centered when the
+            // panel is collapsed (the root ZStack aligns topLeading).
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .ignoresSafeArea()
         }
-        .frame(minHeight: 800)
+        .frame(minWidth: 900, minHeight: 620)
+        .animation(.spring(), value: showSidePanel)
+        .onAppear {
+            locationController.mapVisibleInsetRight = showSidePanel ? sidePanelTotalWidth : 0
+        }
+        .onChange(of: showSidePanel) { newValue in
+            locationController.mapVisibleInsetRight = newValue ? sidePanelTotalWidth : 0
+        }
+        .modifier(Alert(isPresented: $locationController.showingAlert, text: locationController.alertText))
         .onAppear {
             eventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .keyUp]) { event in
                 let isKeyDown = event.type == .keyDown
@@ -261,6 +131,160 @@ struct ContentView: View {
     init(mapView: MapView, locationController: LocationController) {
         self.mapView = mapView
         self.locationController = locationController
+    }
+
+    // MARK: - Debug log overlay
+
+    private var debugLogOverlay: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(locationController.logs.reversed()) { log in
+                        // Unified format: [time] [level] [file:line] message
+                        Text("[\(locationController.dateFormatter.string(from: log.date))] [\(log.level.label)] [\(log.location)] \(log.message)")
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundColor(.primary)
+                            .id(log.id)
+                    }
+                }
+                .padding(8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(width: 400)
+            .frame(maxHeight: 250)
+            .mapOverlayChrome()
+            .padding()
+            .onChange(of: locationController.logs.count) { _ in
+                if let lastId = locationController.logs.first?.id {
+                    withAnimation {
+                        proxy.scrollTo(lastId, anchor: .bottom)
+                    }
+                }
+            }
+            .onAppear {
+                if let lastId = locationController.logs.first?.id {
+                    proxy.scrollTo(lastId, anchor: .bottom)
+                }
+            }
+        }
+    }
+
+    // MARK: - Map zoom / locate cluster
+
+    private var zoomCluster: some View {
+        VStack(spacing: 0) {
+            MapControlButton(icon: "plus") {
+                var region: MKCoordinateRegion = mapView.mkMapView.region
+                region.span.latitudeDelta /= 2.0
+                region.span.longitudeDelta /= 2.0
+                mapView.mkMapView.setRegion(region, animated: true)
+            }
+            Divider().frame(width: 28)
+            MapControlButton(icon: "minus") {
+                var region: MKCoordinateRegion = mapView.mkMapView.region
+                region.span.latitudeDelta *= 2.0
+                region.span.longitudeDelta *= 2.0
+                mapView.mkMapView.setRegion(region, animated: true)
+            }
+            Divider().frame(width: 28)
+            MapControlButton(icon: "location") {
+                locationController.updateMapRegion(force: true)
+            }
+        }
+        .mapOverlayChrome()
+        .padding(.bottom, 24)
+        .padding(.trailing, showSidePanel ? sidePanelTotalWidth + 16 : 16)
+    }
+
+    // MARK: - Search
+
+    private var searchColumn: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 6) {
+                Image(systemName: "magnifyingglass")
+                    .foregroundColor(.secondary)
+                    .font(.callout)
+                    .padding(.leading, 10)
+                TextField("Search location", text: $locationController.searchQuery)
+                    .focused($isSearchFocused)
+                    .textFieldStyle(PlainTextFieldStyle())
+                    .font(.callout)
+                    .padding(.vertical, 7)
+                    .padding(.trailing, 10)
+                    .onSubmit {
+                        locationController.performFullSearch()
+                    }
+            }
+            .mapOverlayChrome()
+            .padding()
+
+            if (!locationController.searchResults.isEmpty || !locationController.fullSearchResults.isEmpty) && !locationController.searchQuery.isEmpty {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        if !locationController.fullSearchResults.isEmpty {
+                            ForEach(locationController.fullSearchResults, id: \.self) { item in
+                                SearchResultRow(
+                                    icon: "mappin.and.ellipse",
+                                    title: item.name ?? item.placemark.title ?? "Unknown",
+                                    subtitle: (item.placemark.title != item.name) ? item.placemark.title : nil
+                                ) {
+                                    locationController.selectMapItem(item)
+                                }
+                            }
+                        } else {
+                            ForEach(locationController.searchResults, id: \.self) { completion in
+                                SearchResultRow(
+                                    icon: completion.subtitle.contains(",") ? "building.2" : "mappin.and.ellipse",
+                                    title: completion.title,
+                                    subtitle: completion.subtitle.isEmpty ? nil : completion.subtitle
+                                ) {
+                                    locationController.selectSearchCompletion(completion)
+                                }
+                            }
+                        }
+                    }
+                }
+                .frame(maxHeight: 300)
+                .mapOverlayChrome()
+                .padding(.horizontal)
+            }
+        }
+        .frame(width: 300)
+    }
+
+    // MARK: - Side panel
+
+    private var sidePanel: some View {
+        VStack(spacing: 0) {
+            iOSPanel()
+                .environmentObject(locationController)
+                .frame(maxHeight: .infinity)
+
+            PanelDivider()
+
+            PanelButton(title: "Copy Logs", icon: "doc.on.doc", style: .subtle) {
+                let log = locationController.logs.map { entry in
+                    let date = locationController.dateFormatter.string(from: entry.date)
+                    return "[\(date)] [\(entry.level.label)] [\(entry.location)] \(entry.message)"
+                }.joined(separator: "\n")
+                let pasteboard = NSPasteboard.general
+                pasteboard.declareTypes([.string], owner: nil)
+                pasteboard.setString(log, forType: .string)
+            }
+            .padding(.vertical, 10)
+        }
+        .frame(width: 300)
+        .padding(.horizontal, 20)
+        .padding(.top, 14)
+        .padding(.bottom, 4)
+        .frame(maxHeight: .infinity)
+        .background(.thickMaterial)
+        .overlay(
+            Rectangle()
+                .fill(PanelTheme.separatorStrong)
+                .frame(width: 0.5),
+            alignment: .leading
+        )
     }
 }
 

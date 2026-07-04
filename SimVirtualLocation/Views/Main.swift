@@ -18,6 +18,11 @@ struct SimVirtualLocationApp: App {
             let locationController = LocationController(mapView: mapView)
             ContentView(mapView: mapView, locationController: locationController)
         }
+        // Immersive map window: the map bleeds under the (hidden) title bar and
+        // the traffic lights float over it, like first-party Maps. The hidden
+        // title-bar strip is still the window-drag region, and SwiftUI's top
+        // safe area keeps overlays clear of the traffic lights.
+        .windowStyle(.hiddenTitleBar)
     }
 }
 

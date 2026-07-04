@@ -33,20 +33,21 @@ struct LocationSettingsPanel: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            modePicker
-                .padding(.vertical, 14)
+            VStack(alignment: .leading, spacing: 12) {
+                sectionHeader
 
-            PanelDivider()
+                modePicker
 
-            Group {
-                if locationController.pointsMode == .single {
-                    singlePointSection
-                } else {
-                    routeSection
+                Group {
+                    if locationController.pointsMode == .single {
+                        singlePointSection
+                    } else {
+                        routeSection
+                    }
                 }
+                .disabled(shouldDisableControls)
+                .opacity(shouldDisableControls ? 0.4 : 1.0)
             }
-            .disabled(shouldDisableControls)
-            .opacity(shouldDisableControls ? 0.4 : 1.0)
             .padding(.vertical, 14)
 
             PanelDivider()
@@ -57,6 +58,36 @@ struct LocationSettingsPanel: View {
                 .frame(maxHeight: .infinity)
         }
         .animation(.easeInOut(duration: 0.25), value: locationController.simulationStatus)
+    }
+
+    // MARK: - Section header
+
+    private var sectionHeader: some View {
+        HStack {
+            PanelSectionLabel(text: "Simulation")
+            Spacer()
+            simulationPill
+        }
+    }
+
+    /// Compact live state for the section — replaces the old top-of-panel
+    /// status pills; device state now lives on the device card.
+    private var simulationPill: some View {
+        let status = locationController.simulationStatus
+        switch status {
+        case .idle:
+            return LiveStatusPill(label: "Idle", color: .gray, pulses: false)
+        case .mocking:
+            return LiveStatusPill(label: "Mocking", color: .green)
+        case .route:
+            return LiveStatusPill(label: "Route", color: .green)
+        case .fromAToB:
+            return LiveStatusPill(label: "A→B", color: .green)
+        case .routePaused, .fromAToBPaused:
+            return LiveStatusPill(label: "Paused", color: .orange, pulses: false)
+        case .stopping:
+            return LiveStatusPill(label: "Stopping…", color: .orange, pulses: false, isLoading: true)
+        }
     }
 
     // MARK: - Mode picker

@@ -275,36 +275,6 @@ struct LiveStatusPill: View {
     }
 }
 
-// MARK: - Status section
-
-/// Unified status zone showing one row per subsystem (device / simulation).
-/// Each row pairs a small uppercase label with a `LiveStatusPill` on the right.
-struct StatusSection: View {
-    struct Row: Identifiable {
-        let id = UUID()
-        let pillLabel: String
-        let color: Color
-        var pulses: Bool = true
-        var isLoading: Bool = false
-    }
-
-    let rows: [Row]
-
-    var body: some View {
-        HStack(spacing: 8) {
-            ForEach(rows) { row in
-                LiveStatusPill(
-                    label: row.pillLabel,
-                    color: row.color,
-                    pulses: row.pulses,
-                    isLoading: row.isLoading
-                )
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .center)
-    }
-}
-
 // MARK: - Container backgrounds
 
 /// Subtle rounded container used for grouped content (saved locations, etc.).
