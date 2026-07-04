@@ -113,12 +113,16 @@ final class MobileDeviceClient: ObservableObject {
 
     func checkDeveloperMode(udid: String) async throws -> Bool {
         let result = try await processRunner.run(args: ["amfi", "developer-mode-status", "--udid", udid], timeout: 15)
-        if result.exitCode != 0 {
-            throw AppError.from(stderr: result.stderr, context: .checkDeveloperMode)
-        }
         let text = String(decoding: result.stdout, as: UTF8.self)
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()
+        // pymobiledevice3 traps errors like DeviceNotFoundError inside main()
+        // and still exits 0 with an empty stdout — a bare exit-code check
+        // misreads that as "Developer Mode disabled". Require an explicit
+        // true/false answer before trusting the result.
+        guard result.exitCode == 0, text.contains("true") || text.contains("false") else {
+            throw AppError.from(stderr: result.stderr, context: .checkDeveloperMode)
+        }
         logger.info("Developer Mode status: \(text)")
         return text.contains("true")
     }

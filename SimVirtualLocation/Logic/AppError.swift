@@ -22,6 +22,7 @@ enum AppError: Error {
 
     // MARK: Device
     case deviceNotSelected
+    case deviceNotFound
     case deviceLocked
     case developerModeDisabled
     case noBootedSimulators
@@ -78,6 +79,8 @@ extension AppError {
             return "Tunneld did not become ready within 30 s. Check that the device is unlocked and Developer Mode is enabled."
         case .deviceNotSelected:
             return "Device not selected"
+        case .deviceNotFound:
+            return "Device not found. Check the USB connection and refresh the device list."
         case .deviceLocked:
             return "Device is locked. Please unlock and retry."
         case .developerModeDisabled:
@@ -150,6 +153,9 @@ extension AppError {
             return .noRouteToHost
         }
         let lower = text.lowercased()
+        if lower.contains("device not found") || lower.contains("devicenotfounderror") {
+            return .deviceNotFound
+        }
         let tunnelDropPatterns = [
             "connection refused",
             "connectionreseterror",
