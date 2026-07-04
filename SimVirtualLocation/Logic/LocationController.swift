@@ -399,13 +399,19 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
 
     private func startMovementTimer() {
         let interval = 0.1
-        timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] timer in
+        // `.common` mode (not the default `scheduledTimer`) so ticks keep
+        // firing while the run loop is in event-tracking mode — otherwise the
+        // puck (and per-tick device updates on the non-GPX path) freeze for
+        // the whole duration of a map drag or an open menu.
+        let movementTimer = Timer(timeInterval: interval, repeats: true) { [weak self] timer in
             guard let self else { timer.invalidate(); return }
             // Timer callback is not necessarily on MainActor, redirecting to main thread
             Task { @MainActor in
                 self.performMovement(stepScale: interval)
             }
         }
+        RunLoop.main.add(movementTimer, forMode: .common)
+        timer = movementTimer
     }
 
     func updateMapRegion(force: Bool = false) {
@@ -1482,15 +1488,24 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
         }
     }
 
+    /// Gate for the mode picker. The UI binds its setter here (never directly
+    /// to `pointsMode`) so a switch while mocking is *vetoed before it happens*
+    /// — `pointsMode` never changes, so nothing tied to the mode can tear the
+    /// running simulation down. Only reachable from a user tap.
+    func requestPointsModeChange(_ newMode: PointsMode) {
+        guard newMode != pointsMode else { return }
+        if simulationStatus.isMockingActive {
+            showAlert("Simulation is running. Stop it before switching modes.")
+            return
+        }
+        pointsMode = newMode
+    }
+
     private func handlePointsModeChange() {
-        // Whenever the user switches modes, terminate any simulation that
-        // belongs to the previous mode so the new mode starts clean.
-        // .mocking → single-point; .route/.fromAToB → two-point.
-        let needsStop = simulationStatus.isMockingActive
+        // Reached only for an allowed change (the picker is gated by
+        // `requestPointsModeChange`). Clear the previous mode's annotations and
+        // overlays so the new mode starts clean.
         Task { @MainActor in
-            if needsStop {
-                await stopSimulation(clearAnnotations: false)
-            }
             mapView.mkMapView.removeAnnotations(mapView.mkMapView.annotations)
             mapView.mkMapView.removeOverlays(mapView.mkMapView.overlays)
             annotations = []
@@ -1612,9 +1627,12 @@ class LocationController: NSObject, ObservableObject, MKMapViewDelegate, CLLocat
     }
 
     func presentAlert(message: String) {
+        // Presenting only — never mutate simulation state here. Alerts fire
+        // for plenty of benign reasons (mode-switch veto, empty search,
+        // duplicate label) while a simulation is running; paths that need a
+        // status reset do it explicitly before alerting.
         alertText = message
         showingAlert = true
-        simulationStatus = .idle
     }
 }
 
@@ -1699,10 +1717,13 @@ extension LocationController {
 
         logger.debug("Joystick started, current simulation status: \(simulationStatus)")
 
-        // 60fps update map
-        joystickMovementTimer = Timer.scheduledTimer(withTimeInterval: 0.016, repeats: true) { [weak self] _ in
+        // 60 fps map update; `.common` mode so movement isn't stalled by
+        // event-tracking run-loop modes (map drags, open menus).
+        let jsTimer = Timer(timeInterval: 0.016, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.updateJoystickPosition() }
         }
+        RunLoop.main.add(jsTimer, forMode: .common)
+        joystickMovementTimer = jsTimer
     }
 
     private func scheduleJoystickDebounce() {

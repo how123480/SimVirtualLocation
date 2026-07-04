@@ -67,7 +67,13 @@ struct LocationSettingsPanel: View {
     // MARK: - Mode picker
 
     private var modePicker: some View {
-        Picker("", selection: $locationController.pointsMode) {
+        // Bind through the gate (not directly to `pointsMode`) so a switch
+        // while mocking is vetoed before it happens, leaving the running
+        // simulation untouched.
+        Picker("", selection: Binding(
+            get: { locationController.pointsMode },
+            set: { locationController.requestPointsModeChange($0) }
+        )) {
             Text("Single Point").tag(LocationController.PointsMode.single)
             Text("Route").tag(LocationController.PointsMode.two)
         }
