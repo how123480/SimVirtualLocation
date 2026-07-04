@@ -56,6 +56,7 @@ final class UsbmuxWatcher {
 
     func stop() {
         generation += 1
+        connection?.stateUpdateHandler = nil
         connection?.cancel()
         connection = nil
     }
@@ -177,6 +178,7 @@ final class UsbmuxWatcher {
 
     private func scheduleReconnect(generation: Int, reason: String) {
         guard self.generation == generation else { return }
+        connection?.stateUpdateHandler = nil
         connection?.cancel()
         connection = nil
         self.generation += 1
